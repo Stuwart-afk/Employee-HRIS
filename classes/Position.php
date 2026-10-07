@@ -1,6 +1,6 @@
 <?php
 
-class Department
+class Position
 {
     private PDO $pdo;
 
@@ -15,12 +15,12 @@ class Department
             SELECT
                 id,
                 code,
-                name,
+                title,
                 description,
                 status,
                 created_at
-            FROM departments
-            ORDER BY name ASC
+            FROM positions
+            ORDER BY title ASC
         ";
 
         $stmt = $this->pdo->prepare($sql);
@@ -32,15 +32,15 @@ class Department
     public function create(array $data): bool
     {
         $sql = "
-            INSERT INTO departments (
+            INSERT INTO positions (
                 code,
-                name,
+                title,
                 description,
                 status
             )
             VALUES (
                 :code,
-                :name,
+                :title,
                 :description,
                 :status
             )
@@ -50,20 +50,19 @@ class Department
 
         return $stmt->execute([
             'code' => $data['code'],
-            'name' => $data['name'],
+            'title' => $data['title'],
             'description' => $data['description'] ?: null,
             'status' => $data['status']
         ]);
     }
+
     public function getActive(): array {
-        $stmt = $this->pdo->prepare(
-            "
-            SELECT id, code, name, status
-            FROM departments
-            WHERE status = 'active'
-            ORDER BY name ASC
-            "
-        );
+        $stmt = $this->pdo->prepare("
+        SELECT id, code, title, status
+        FROM positions
+        WHERE status = 'Active'
+        ORDER BY title ASC
+        ");
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
