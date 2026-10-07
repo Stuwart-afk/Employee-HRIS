@@ -131,4 +131,60 @@ class Employee
             'employment_status' => $data['employment_status']
         ]);
     }
+
+    public function update(int $id, array $data): bool {
+
+        $sql = "UPDATE employees
+        SET
+            employee_id =       :employee_id,
+            first_name =        :first_name,
+            middle_name =       :middle_name,
+            last_name =         :last_name,
+            suffix =            :suffix,
+            date_of_birth =     :date_of_birth,
+            gender =            :gender,
+            phone =             :phone,
+            email =             :email,
+            address =           :address,
+            department_id =     :department_id,
+            position_id =       :position_id,
+            date_hired =        :date_hired,
+            employment_type =   :employment_type,
+            employment_status = :employment_status,
+            updated_at =        NOW()
+        WHERE id = :id";
+
+        $stmt = $this->pdo->prepare($sql);
+
+        return $stmt->execute([
+            'employee_id'       => $data['employee_id'],
+            'first_name'        => $data['first_name'],
+            'middle_name'       => $data['middle_name'] ?: null,
+            'last_name'         => $data['last_name'],
+            'suffix'            => $data['suffix'],
+            'date_of_birth'     => $data['date_of_birth'],
+            'gender'            => $data['gender'],
+            'phone'             => $data['phone'],
+            'email'             => $data['email'],
+            'address'           => $data['address'],
+            'department_id'     => $data['department_id'],
+            'position_id'        => $data['position_id'],
+            'date_hired'        => $data['date_hired'],
+            'employment_type'   => $data['employment_type'],
+            'employment_status' => $data['employment_status'],
+            'id'                => $id
+
+        ]);
+    }
+
+    public function deactivate(int $id): bool {
+        $sql = "
+                UPDATE employees
+                SET employment_status = 'Inactive', updated_at = NOW()
+                WHERE id = :id
+                ";
+        $stmt = $this->pdo->prepare($sql);
+        return $stmt->execute(['id' => $id]);
+    }
+
 }

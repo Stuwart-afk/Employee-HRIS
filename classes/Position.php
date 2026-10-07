@@ -55,4 +55,15 @@ class Position
             'status' => $data['status']
         ]);
     }
+
+    public function getActive(): array {
+        $stmt = $this->pdo->prepare("
+        SELECT id, code, title, status
+        FROM positions
+        WHERE status = 'Active'
+        ORDER BY title ASC
+        ");
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }

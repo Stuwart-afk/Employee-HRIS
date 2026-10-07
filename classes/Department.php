@@ -55,4 +55,16 @@ class Department
             'status' => $data['status']
         ]);
     }
+    public function getActive(): array {
+        $stmt = $this->pdo->prepare(
+            "
+            SELECT id, code, name, status
+            FROM departments
+            WHERE status = 'active'
+            ORDER BY name ASC
+            "
+        );
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }

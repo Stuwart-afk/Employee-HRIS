@@ -53,6 +53,8 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
 
 <h2>Add Department</h2>
 
+
+
 <form method="POST">
 
     <div>
@@ -112,6 +114,9 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
 
     <button type="submit">
         Add Department
+    </button>
+    <button type="button" onclick="window.location.href='position.php'">
+    See Position
     </button>
 
 </form>
