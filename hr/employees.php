@@ -29,6 +29,15 @@ $allowed = array_values($sortKeyMap);
 if (!in_array($sortBy, $allowed, true)) {
     $sortBy = '';
 }
+
+function emp_full_name(array $e): string {
+    $m = !empty($e['middle_name']) ? $e['middle_name'] . ' ' : '';
+    $s = !empty($e['suffix']) ? ' ' . $e['suffix'] : '';
+    return trim($e['first_name'] ?? '') . ' ' .$m.($e['last_name'] ?? '') . $s;
+}
+
+
+
 require __DIR__ . '/../templates/hrTemplates/header.php';
 ?>
 
