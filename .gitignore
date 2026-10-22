@@ -1,2 +1,13 @@
 config/supabase.php
 /vendor/
+
+# Realtime: secret written by terraform apply
+config/realtime.json
+realtime/node_modules/
+
+# Terraform: local state holds the generated secret
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.generated/
+terraform/*.tfvars
