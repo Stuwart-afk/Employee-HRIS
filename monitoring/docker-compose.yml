@@ -1,26 +1,48 @@
 # ============================================================
-# NOTE: terraform/ now runs this same stack plus the real-time
-# WebSocket server (cd terraform; terraform apply). Use either
-# Terraform or this compose file, not both: they share ports
-# and container names.
-#
-# HRIS Monitoring Stack
+# HRIS Infrastructure & Monitoring Stack
+# - Database:      MariaDB 10.4 running on port 3306 (replaces XAMPP MySQL)
 # - Prometheus:    collects metrics from the PHP exporter sidecar
 # - Grafana:       visualizes metrics with a pre-built dashboard
 # - hris-exporter: PHP-CLI server running metrics.php inside Docker
-#                  (bypasses Windows Firewall entirely — no admin needed)
 #
 # Usage:
 #   cd monitoring
-#   docker compose up -d --build
+#   docker compose up -d
 #
 # Access:
+#   Database   → localhost:3306         (user: root / password: [empty])
 #   Grafana    → http://localhost:3000  (user: admin / password: hris@admin)
 #   Prometheus → http://localhost:9090
 #   Metrics    → http://localhost:9091/monitoring/metrics.php
 # ============================================================
 
 services:
+
+  # ----------------------------------------------------------
+  # MySQL / MariaDB database service — stores HRIS data in Docker,
+  # eliminating the need to run MySQL inside XAMPP.
+  # Preloads database/docker_init.sql on initial volume creation.
+  # ----------------------------------------------------------
+  db:
+    image: mariadb:10.4
+    container_name: hris_db
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: hris
+    volumes:
+      - db_data:/var/lib/mysql
+      - ../database/docker_init.sql:/docker-entrypoint-initdb.d/01_docker_init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - monitoring
 
   # ----------------------------------------------------------
   # PHP metrics exporter — runs metrics.php INSIDE Docker so
@@ -40,18 +62,12 @@ services:
     volumes:
       - ../:/app:ro
     working_dir: /app
-    # MySQL (XAMPP) runs on the Windows host, not in this container, so
-    # config/database.php is pointed at the host through these variables.
     environment:
-      DB_HOST: ${HRIS_DB_HOST:-host.docker.internal}
+      DB_HOST: ${HRIS_DB_HOST:-db}
       DB_PORT: ${HRIS_DB_PORT:-3306}
       DB_NAME: ${HRIS_DB_NAME:-hris}
-      # Same account as the app (XAMPP default). For a read-only account, run
-      #   GRANT SELECT ON hris.* TO 'hris_metrics'@'127.0.0.1' IDENTIFIED BY '...';
-      # and set HRIS_DB_USER / HRIS_DB_PASS before `docker compose up`.
       DB_USER: ${HRIS_DB_USER:-root}
       DB_PASS: ${HRIS_DB_PASS:-}
-    # Makes host.docker.internal resolvable on this custom network
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -60,8 +76,37 @@ services:
       timeout: 25s
       retries: 3
       start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - monitoring
+
+  # ----------------------------------------------------------
+  # Realtime WebSocket server — broadcasts live leave updates
+  # and serves /metrics for Prometheus monitoring.
+  # ----------------------------------------------------------
+  hris-realtime:
+    build:
+      context: ../realtime
+    image: hris-realtime:latest
+    container_name: hris_realtime
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      HRIS_REALTIME_SECRET: ${HRIS_REALTIME_SECRET:-F4HBp1jQJ4c1b1hJj8Q2AyHWUnbJ9FwPS7mnT0VPKxh9I6vs}
+      PORT: 8090
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8090/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      monitoring:
+        aliases:
+          - hris-realtime
 
   prometheus:
     image: prom/prometheus:latest
@@ -81,6 +126,7 @@ services:
       - '--web.enable-lifecycle'
     depends_on:
       - hris-exporter
+      - hris-realtime
     networks:
       - monitoring
 
@@ -108,6 +154,8 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  db_data:
     driver: local
 
 networks:
