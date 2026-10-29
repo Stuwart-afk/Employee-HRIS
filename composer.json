@@ -5,6 +5,11 @@
             "Administrator\\EmployeeHris\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Administrator\\EmployeeHris\\Tests\\": "tests/"
+        }
+    },
     "authors": [
         {
             "name": "Stuwart",
