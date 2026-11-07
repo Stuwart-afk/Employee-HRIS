@@ -1,18 +1,5 @@
 <?php
-/**
- * Shared Reports data layer.
- *
- * Computes the HR reporting figures (quick stats + headcount by department)
- * and exposes them as $stats, $headcount, $sortBy, $dir and $queryError so
- * the same numbers can be rendered both on the standalone Reports page
- * (hr/report.php) and embedded inside the HR dashboard.
- *
- * Requires an open $pdo (config/database.php) before inclusion.
- *
- * Set $REPORT_ALLOW_EXPORT = false before including to disable the CSV
- * download branch (used when embedding, where exit would kill the host page).
- */
-
+require_once __DIR__ . '/../algorithms/merge_sort.php';
 if (!isset($pdo) || !($pdo instanceof PDO)) {
     // Nothing to compute without a connection; provide safe defaults.
     $stats = ['active' => 0, 'inactive' => 0, 'depts' => 0, 'pending_leaves' => 0];
@@ -187,3 +174,16 @@ if ($REPORT_ALLOW_EXPORT && $export === 'headcount_csv') {
     fclose($out);
     exit;
 }
+/**
+ * Shared Reports data layer.
+ *
+ * Computes the HR reporting figures (quick stats + headcount by department)
+ * and exposes them as $stats, $headcount, $sortBy, $dir and $queryError so
+ * the same numbers can be rendered both on the standalone Reports page
+ * (hr/report.php) and embedded inside the HR dashboard.
+ *
+ * Requires an open $pdo (config/database.php) before inclusion.
+ *
+ * Set $REPORT_ALLOW_EXPORT = false before including to disable the CSV
+ * download branch (used when embedding, where exit would kill the host page).
+ */
