@@ -153,20 +153,19 @@ if ($tab === 'salaries') {
 }
 
 if ($tab === 'periods' || $tab === 'payslips') {
-    $periods = $payroll->getAllPeriods();
+  $periods = $payroll->getAllPeriods();
 
-    // ── DSA: Linked List — payroll periods chain ──────────────
-    $periodList = new LinkedList();
-    foreach ($periods as $period) {
-        $periodList->append($period); // O(1) per node
-    }
-    $latestPeriod = $periodList->tail(); // most recent
-    $oldestPeriod = $periodList->head(); // first ever
+  $periodList = new LinkedList();
+  foreach ($periods as $period) {
+    $periodList->append($period); // O(1) per node
+  }
+  $latestPeriod = $periodList->tail(); // most recent
+  $oldestPeriod = $periodList->head(); // first ever
 }
 
 if ($tab === 'payslips' && $selPeriodId > 0) {
-    $selPeriod = $payroll->getPeriodById($selPeriodId);
-    $payslips  = $payroll->getPayslipsByPeriod($selPeriodId);
+  $selPeriod = $payroll->getPeriodById($selPeriodId);
+  $payslips  = $payroll->getPayslipsByPeriod($selPeriodId);
 }
 
 require __DIR__ . '/../templates/hrTemplates/header.php';
