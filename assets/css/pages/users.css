@@ -57,3 +57,9 @@
 }
 
 .metric-card .metric-number { margin: 6px 0 6px; }
+
+.pill-pending {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, .12);
+    border: 1px solid rgba(245, 158, 11, .3);
+}
