@@ -1,47 +1,34 @@
-
 <?php
 
-require_once __DIR__ . '/vendor/autoload.php';
-
-$mailConfig = require __DIR__ . '/config/mail.php';
-
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
-
-$mail = new PHPMailer(true);
+require_once __DIR__ . '/classes/Mailer.php';
 
 try {
-    $mail->isSMTP();
-    $mail->Host       = $mailConfig['host'];
-    $mail->SMTPAuth   = true;
-    $mail->Username   = $mailConfig['username'];
-    $mail->Password   = $mailConfig['password'];
-    $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-    $mail->Port       = $mailConfig['port'];
+    $mailer = new Mailer();
 
-    $mail->setFrom(
-        $mailConfig['from_email'],
-        $mailConfig['from_name']
+    $sent = $mailer->send(
+        'bnbsshi@gmail.com',
+        'HRIS Email Test',
+        '
+            <div style="font-family:Arial,sans-serif;padding:20px;">
+                <h2 style="color:#16a085;">
+                    HRIS Email Test Successful!
+                </h2>
+                <p>Your Gmail SMTP configuration is working.</p>
+                <p>You can now proceed with password reset testing.</p>
+            </div>
+        ',
+        'HRIS Email Test Successful! Your Gmail SMTP configuration is working.'
     );
 
-    // Replace with your own email for testing.
-    $mail->addAddress('bnbsshi@gmail.com');
+    if ($sent) {
+        echo 'SUCCESS: Test email sent successfully!';
+    } else {
+        echo 'ERROR: Email could not be sent. Check your PHP error log.';
+    }
 
-    $mail->isHTML(true);
-    $mail->Subject = 'HRIS Email Test';
+} catch (Throwable $e) {
 
-    $mail->Body = '
-        <h2>HRIS Email Test Successful!</h2>
-        <p>Your Gmail SMTP configuration is working.</p>
-    ';
+    error_log('HRIS email test failed: ' . $e->getMessage());
 
-    $mail->AltBody = 'HRIS Email Test Successful!';
-
-    $mail->send();
-
-    echo 'SUCCESS: Test email sent successfully!';
-
-} catch (Exception $e) {
-    error_log('HRIS email test failed: ' . $mail->ErrorInfo);
-    echo 'ERROR: Email could not be sent. Check your SMTP configuration and server logs.';
+    echo 'ERROR: Check your PHP error log.';
 }

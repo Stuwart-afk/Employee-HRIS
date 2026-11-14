@@ -162,6 +162,24 @@ CREATE TABLE IF NOT EXISTS user_setup_tokens (
 
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id         BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id    BIGINT       NOT NULL,
+    token_hash CHAR(64)     NOT NULL,
+    expires_at DATETIME     NOT NULL,
+    used_at    DATETIME     DEFAULT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_password_reset_token_hash (token_hash),
+    KEY idx_password_reset_user (user_id),
+    KEY idx_password_reset_expiry (expires_at),
+
+    CONSTRAINT fk_password_reset_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Passwords below are PHP password_hash() $2y$ hashes for 'password123'
 -- To regenerate: php -r "echo password_hash('password123', PASSWORD_DEFAULT);"
 -- ============================================================

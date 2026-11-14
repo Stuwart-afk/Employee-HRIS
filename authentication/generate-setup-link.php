@@ -60,7 +60,7 @@ try {
 
     // Invalidate previous unused setup links.
     $stmt = $pdo->prepare("
-        UPDATE password_setup_tokens
+        UPDATE user_setup_tokens
         SET used_at = NOW()
         WHERE user_id = :user_id
           AND used_at IS NULL
@@ -76,7 +76,7 @@ try {
 
     // Link expires after 30 minutes.
     $stmt = $pdo->prepare("
-        INSERT INTO password_setup_tokens
+        INSERT INTO user_setup_tokens
             (user_id, token_hash, expires_at)
         VALUES
             (:user_id, :token_hash, DATE_ADD(NOW(), INTERVAL 30 MINUTE))
