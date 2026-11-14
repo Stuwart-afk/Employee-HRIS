@@ -2,7 +2,15 @@
     "name": "administrator/employee-hris",
     "autoload": {
         "psr-4": {
-            "Administrator\\EmployeeHris\\": "src/"
+            "Administrator\\EmployeeHris\\": "src/",
+            "App\\Domain\\": "classes/Domain/",
+            "App\\Application\\": "classes/Application/",
+            "App\\Infrastructure\\": "classes/Infrastructure/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
         }
     },
     "authors": [
@@ -14,5 +22,9 @@
     "require-dev": {
         "phpunit/phpunit": "11.5.50",
         "phpstan/phpstan": "^2.3"
+    },
+    "require": {
+        "phpmailer/phpmailer": "^7.2",
+        "vlucas/phpdotenv": "^5.8"
     }
 }
