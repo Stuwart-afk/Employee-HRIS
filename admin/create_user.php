@@ -13,7 +13,7 @@ require_once __DIR__ . '/../classes/Mailer.php';
 $mailConfig = require __DIR__ . '/../config/mail.php';
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
+  session_start();
 }
 
 $userModel = new User($pdo);
@@ -30,8 +30,8 @@ $errors = [];
 $success = '';
 
 if (isset($_SESSION['create_user_success'])) {
-    $success = $_SESSION['create_user_success'];
-    unset($_SESSION['create_user_success']);
+  $success = $_SESSION['create_user_success'];
+  unset($_SESSION['create_user_success']);
 }
 
 $cleanupMessage = '';
@@ -259,7 +259,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Throwable $e) {
 
       error_log(
-        'Create user invitation failed: ' . $e->getMessage()
+        'Create user invitation failed: '
+          . $e->getMessage()
+          . ' | File: '
+          . $e->getFile()
+          . ' | Line: '
+          . $e->getLine()
       );
 
       $errors[] = 'Could not complete account creation. Please check the server logs.';
