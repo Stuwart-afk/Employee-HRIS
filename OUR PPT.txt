@@ -15,7 +15,7 @@ legend
 10.figma            ipa kita ato FIGMA
 11. UI test #       open selenium nya run 
 12. Rbac #          sample natu na admin naku change sa ilahang rank from employee to team leader or manager
-13. Cron job #      
+13. Cron job #      Mag run rata command sa powersehll para testing adto sa hr then dapat naay notification mo gawas adto after run sa command
 14. Web socket #    websocket sa leave request natu siya gi add
 15.docker #         docker naa na atu docker
 16. Audit trail     mao na ato admin 
