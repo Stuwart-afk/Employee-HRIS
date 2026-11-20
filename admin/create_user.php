@@ -24,14 +24,18 @@ $mailer = new Mailer();
 $roles = Rbac::ROLES;
 $employees = $userModel->getEmployeesWithoutUsers();
 
-
-
 $errors = [];
 $success = '';
+$warning = '';
 
 if (isset($_SESSION['create_user_success'])) {
   $success = $_SESSION['create_user_success'];
   unset($_SESSION['create_user_success']);
+}
+
+if (isset($_SESSION['create_user_warning'])) {
+  $warning = $_SESSION['create_user_warning'];
+  unset($_SESSION['create_user_warning']);
 }
 
 $cleanupMessage = '';
@@ -233,13 +237,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         . "{$setupUrl}\n\n"
         . "This link expires after 10 minutes.";
 
-      // Send email.
-      $sent = $mailer->send(
-        $employeeEmail,
-        $subject,
-        $htmlBody,
-        $plainBody
-      );
+      // Send email without deleting the newly created account if SMTP fails.
+      $sent = false;
+      try {
+        $sent = $mailer->send(
+          $employeeEmail,
+          $subject,
+          $htmlBody,
+          $plainBody
+        );
+      } catch (Throwable $mailError) {
+        error_log(
+          "HRIS invitation email exception for user ID {$userId}: "
+            . $mailError->getMessage()
+        );
+        $sent = false;
+      }
 
       if ($sent) {
 
@@ -255,13 +268,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           "HRIS invitation email failed for user ID: {$userId}"
         );
 
-        // Remove the pending account so the same username/employee can be retried.
-        try {
-          $userModel->deletePendingAccount($userId);
-          $errors[] = 'The invitation email could not be sent, so the account was not created. Check the mail settings and try again.';
-        } catch (Throwable $cleanupError) {
-          $errors[] = 'The account was created, but the invitation email could not be sent. Use "Resend invitation" on the Users page.';
-        }
+        $_SESSION['create_user_warning'] =
+          "Account created for {$username}, but the invitation email to {$employeeEmail} could not be sent. "
+          . "Use this setup link directly (expires in 10 minutes): {$setupUrl}";
+
+        header('Location: create_user.php');
+        exit;
       }
     } catch (Throwable $e) {
 
@@ -309,6 +321,15 @@ require __DIR__ . '/../templates/adminTemplates/header.php';
     <?php foreach ($errors as $e): ?>
       <div><?= htmlspecialchars($e) ?></div>
     <?php endforeach; ?>
+  </div>
+<?php endif; ?>
+
+<?php if ($warning): ?>
+  <div class="alert"
+    style="margin-bottom:20px;border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.14);color:#fde68a;word-break:break-all">
+
+    <?= htmlspecialchars($warning) ?>
+
   </div>
 <?php endif; ?>
 
