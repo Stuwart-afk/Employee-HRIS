@@ -4,6 +4,7 @@ require_once __DIR__ . '/../authentication/guard.php';
 require_access('payslips', 'edit', 'all');
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../classes/Payroll.php';
+require_once __DIR__ . '/../classes/AttendanceService.php';
 require_once __DIR__ . '/../classes/DSA/LinkedList.php';
 require_once __DIR__ . '/../includes/schedule_evaluator.php';
 require_once __DIR__ . '/../includes/overtime_logic.php';
