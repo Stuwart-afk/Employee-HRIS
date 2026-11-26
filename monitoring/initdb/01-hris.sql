@@ -220,8 +220,6 @@ CREATE TABLE
         INDEX idx_holiday_status (status)
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
-;
-
 CREATE TABLE
     IF NOT EXISTS promotion_logs (
         id BIGINT NOT NULL AUTO_INCREMENT,
@@ -289,39 +287,35 @@ CREATE TABLE
 -- Passwords below are PHP password_hash() $2y$ hashes for 'password123'
 -- To regenerate: php -r "echo password_hash('password123', PASSWORD_DEFAULT);"
 -- ============================================================
--- 5. ATTENDANCE (after employees so FK works)
+-- 5. ATTENDANCE
 -- ============================================================
-<<<<<<< HEAD
 CREATE TABLE
     IF NOT EXISTS attendance (
         id BIGINT NOT NULL AUTO_INCREMENT,
         employee_id BIGINT DEFAULT NULL,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         email VARCHAR(255) DEFAULT NULL,
         time_in DATETIME DEFAULT NULL,
-        time_out DATET    Break_Time  DATETIME      DEFAULT NULL,
-    PRIMARY KEY (id),
-    KEY idx_attendance_email_time_in (email, time_in),  DATETIME      DEFAULT NULL,
-    workhours   DECIMAL(10,2) DEFAULT NULL,
-    Break_Time  DATETIME      DEFAULT NULL,
-    -- Shift lifecycle + overtime (see classes/AttendanceService.php)
-    shift_date             DATE          DEFAULT NULL,
-    status                 VARCHAR(20)   DEFAULT NULL,  -- OPEN | COMPLETED | MISSING_OUT
-    regular_hours          DECIMAL(10,2) DEFAULT NULL,
-    overtime_minutes       INT           DEFAULT NULL,
-    overtime_hours         DECIMAL(10,2) DEFAULT NULL,
-    overtime_status        VARCHAR(20)   DEFAULT NULL,  -- NONE | PENDING_APPROVAL | APPROVED | REJECTED
-    overtime_reviewed_by   BIGINT        DEFAULT NULL,
-    overtime_reviewed_at   DATETIME      DEFAULT NULL,
-    missing_out_flagged_at DATETIME      DEFAULT NULL,
-    PRIMARY KEY (id),
-    KEY idx_attendance_email_time_in (email, time_in),
-    KEY idx_attendance_employee      (employee_id),
-    CONSTRAINT fk_attendance_employee
-        FOREIGN KEY (employee_id) REFERENCES employees (id)
-        ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
->>>>>>> adabb9c (Employee done i think)
+        time_out DATETIME DEFAULT NULL,
+        break_time DATETIME DEFAULT NULL,
+        workhours DECIMAL(10, 2) DEFAULT NULL,
+        -- Shift lifecycle + overtime
+        shift_date DATE DEFAULT NULL,
+        status VARCHAR(20) DEFAULT NULL,
+        regular_hours DECIMAL(10, 2) DEFAULT NULL,
+        overtime_minutes INT DEFAULT NULL,
+        overtime_hours DECIMAL(10, 2) DEFAULT NULL,
+        overtime_status VARCHAR(20) DEFAULT NULL,
+        overtime_reviewed_by BIGINT DEFAULT NULL,
+        overtime_reviewed_at DATETIME DEFAULT NULL,
+        missing_out_flagged_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_attendance_email_time_in (email, time_in),
+        KEY idx_attendance_employee (employee_id),
+        KEY idx_attendance_shift_date (shift_date),
+        KEY idx_attendance_status (status),
+        CONSTRAINT fk_attendance_employee FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE SET NULL ON UPDATE CASCADE
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- employee_id backfilled from email via subquery (MySQL 8 compatible)
 -- ============================================================
@@ -674,10 +668,11 @@ CREATE TABLE
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
-INSERT IGNORE INTO roles (role_key, role_name, is_protected) VALUES
-    ('admin',    'Administrator', 1),
-    ('hr',       'HR Staff',      1),
-    ('employee', 'Employee',      0);
+INSERT IGNORE INTO roles (role_key, role_name, is_protected)
+VALUES
+    ('admin', 'Administrator', 1),
+    ('hr', 'HR Staff', 1),
+    ('employee', 'Employee', 0);
 
 -- =========================================
 -- 2. MODULES
@@ -694,21 +689,32 @@ CREATE TABLE
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
-INSERT IGNORE INTO modules (module_key, module_name, is_active, sort_order) VALUES
-    ('dashboard',            'Dashboard',            1,  1),
-    ('employee_records',     'Employee Records',     1,  2),
-    ('employee_onboarding',  'Employee Onboarding',  1,  3),
-    ('recruitment',          'Recruitment',          1,  4),
-    ('attendance',           'Attendance',           1,  5),
-    ('leave_requests',       'Leave Requests',       1,  6),
-    ('payroll',              'Payroll',              1,  7),
-    ('payslips',             'Payslips',             1,  8),
-    ('promotion_management', 'Promotion Management', 1,  9),
-    ('user_management',      'User Management',      1, 10),
-    ('audit_logs',           'Audit Logs',           1, 11),
-    ('reports',              'Reports',              1, 12),
-    ('system_settings',      'System Settings',      1, 13),
-    ('backup_management',    'Backup Management',    1, 14);
+INSERT IGNORE INTO modules (module_key, module_name, is_active, sort_order)
+VALUES
+    ('dashboard', 'Dashboard', 1, 1),
+    ('employee_records', 'Employee Records', 1, 2),
+    (
+        'employee_onboarding',
+        'Employee Onboarding',
+        1,
+        3
+    ),
+    ('recruitment', 'Recruitment', 1, 4),
+    ('attendance', 'Attendance', 1, 5),
+    ('leave_requests', 'Leave Requests', 1, 6),
+    ('payroll', 'Payroll', 1, 7),
+    ('payslips', 'Payslips', 1, 8),
+    (
+        'promotion_management',
+        'Promotion Management',
+        1,
+        9
+    ),
+    ('user_management', 'User Management', 1, 10),
+    ('audit_logs', 'Audit Logs', 1, 11),
+    ('reports', 'Reports', 1, 12),
+    ('system_settings', 'System Settings', 1, 13),
+    ('backup_management', 'Backup Management', 1, 14);
 
 -- =========================================
 -- 3. PERMISSIONS
@@ -721,13 +727,14 @@ CREATE TABLE
         description VARCHAR(255) NULL
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
-INSERT IGNORE INTO permissions (permission_key, permission_name) VALUES
-    ('view',    'View'),
-    ('create',  'Create'),
-    ('edit',    'Edit'),
-    ('delete',  'Delete'),
+INSERT IGNORE INTO permissions (permission_key, permission_name)
+VALUES
+    ('view', 'View'),
+    ('create', 'Create'),
+    ('edit', 'Edit'),
+    ('delete', 'Delete'),
     ('approve', 'Approve'),
-    ('submit',  'Submit');
+    ('submit', 'Submit');
 
 -- =========================================
 -- 4. ROLE PERMISSIONS
@@ -1035,10 +1042,34 @@ ORDER BY
     m.sort_order,
     p.id;
 
+-- Add manager_id column if it does not exist
 ALTER TABLE employees
-ADD COLUMN manager_id BIGINT DEFAULT NULL AFTER `rank`,
-ADD INDEX idx_employees_manager (manager_id),
-ADD CONSTRAINT fk_employee_manager FOREIGN KEY (manager_id) REFERENCES employees (id) ON DELETE SET NULL ON UPDATE CASCADE;
+ADD COLUMN IF NOT EXISTS manager_id BIGINT DEFAULT NULL AFTER `rank`;
+
+-- Add manager index if it does not exist
+CREATE INDEX IF NOT EXISTS idx_employees_manager ON employees (manager_id);
+
+-- Add foreign key if it does not exist
+DELIMITER / / CREATE PROCEDURE add_employee_manager_fk () BEGIN IF NOT EXISTS (
+    SELECT
+        1
+    FROM
+        information_schema.TABLE_CONSTRAINTS
+    WHERE
+        CONSTRAINT_SCHEMA = DATABASE ()
+        AND TABLE_NAME = 'employees'
+        AND CONSTRAINT_NAME = 'fk_employee_manager'
+        AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+) THEN
+ALTER TABLE employees ADD CONSTRAINT fk_employee_manager FOREIGN KEY (manager_id) REFERENCES employees (id) ON DELETE SET NULL ON UPDATE CASCADE;
+
+END IF;
+
+END / / DELIMITER;
+
+CALL add_employee_manager_fk ();
+
+DROP PROCEDURE add_employee_manager_fk;
 
 -- ============================================================
 -- AUTO_INCREMENT VALUES
