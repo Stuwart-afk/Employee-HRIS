@@ -38,7 +38,12 @@ const SECRET = loadSecret();
 // ---------------------------------------------------------------------------
 const startedAt = Date.now();
 const counters = {
-  events: new Map(),          // type -> count
+  events: new Map([
+    ['leave.filed', 0],
+    ['leave.approved', 0],
+    ['leave.rejected', 0],
+    ['leave.cancelled', 0],
+  ]),
   deliveries: 0,
   authFailures: 0,
   publishRejected: 0,
