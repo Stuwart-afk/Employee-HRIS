@@ -5,6 +5,8 @@ require_access('payslips', 'edit', 'all');
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../classes/Payroll.php';
 require_once __DIR__ . '/../classes/DSA/LinkedList.php';
+require_once __DIR__ . '/../includes/schedule_evaluator.php';
+require_once __DIR__ . '/../includes/overtime_logic.php';
 
 // DDD — Application layer wired to real MySQL repository
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -16,6 +18,76 @@ use App\Infrastructure\Persistence\PdoPayslipRepository;
 $payroll    = new Payroll($pdo);
 $psRepo     = new PdoPayslipRepository($pdo);
 $psHandler  = new GeneratePayslipHandler($psRepo);
+
+/**
+ * Computes approved overtime minutes and hours for an employee within a pay period.
+ * Only HR-approved overtime requests are counted.
+ */
+function pay_get_approved_overtime_hours(PDO $pdo, int $employeeId, string $startDate, string $endDate): float {
+  $approvedMinutes = 0;
+
+  if (ot_logic_has_table($pdo, 'overtime_requests')) {
+    $stmt = $pdo->prepare(
+      "SELECT COALESCE(SUM(`approved_minutes`), 0)
+       FROM `overtime_requests`
+       WHERE `employee_id` = :employee_id
+         AND `work_date` BETWEEN :start_date AND :end_date
+         AND `status` = 'Approved'"
+    );
+    $stmt->execute([
+      ':employee_id' => $employeeId,
+      ':start_date'  => $startDate,
+      ':end_date'    => $endDate,
+    ]);
+    $approvedMinutes += max(0, (int)$stmt->fetchColumn());
+  }
+
+  if ($approvedMinutes === 0 && ot_logic_has_table($pdo, 'attendance') && ot_logic_has_col($pdo, 'attendance', 'overtime_hours')) {
+    $hasStatusCol = ot_logic_has_col($pdo, 'attendance', 'overtime_status');
+    $whereStatus = $hasStatusCol ? "AND UPPER(COALESCE(`overtime_status`, '')) = 'APPROVED'" : "";
+    $stmt = $pdo->prepare(
+      "SELECT COALESCE(SUM(COALESCE(`overtime_hours`, 0)), 0)
+       FROM `attendance`
+       WHERE `employee_id` = :employee_id
+         AND `time_in` IS NOT NULL
+         AND DATE(`time_in`) BETWEEN :start_date AND :end_date
+         {$whereStatus}"
+    );
+    $stmt->execute([
+      ':employee_id' => $employeeId,
+      ':start_date'  => $startDate,
+      ':end_date'    => $endDate,
+    ]);
+    return round(max(0.0, (float)$stmt->fetchColumn()), 4);
+  }
+
+  return round($approvedMinutes / 60.0, 4);
+}
+
+/**
+ * Ensures any open attendance shifts in the pay period are auto-timed-out at scheduled_end
+ * before generating payslips.
+ */
+function pay_sync_period_auto_timeout(PDO $pdo, string $startDate, string $endDate): void {
+  try {
+    sched_ensure_schema($pdo);
+  } catch (Throwable $e) {}
+
+  $cur = strtotime($startDate);
+  $end = strtotime($endDate);
+  $today = date('Y-m-d');
+
+  while ($cur !== false && $end !== false && $cur <= $end) {
+    $d = date('Y-m-d', $cur);
+    if ($d <= $today) {
+      try {
+        sched_sync_realtime_attendance($pdo, $d);
+        ot_apply_auto_timeout($pdo, $d);
+      } catch (Throwable $e) {}
+    }
+    $cur = strtotime('+1 day', $cur);
+  }
+}
 
 // ─── Active tab ──────────────────────────────────────────────────────────────
 $tab = $_GET['tab'] ?? 'salaries';
@@ -134,6 +206,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Overtime columns must exist before the attendance queries below.
         AttendanceService::ensureSchema($pdo);
 
+        // Enforce schedule sync & auto time-out at scheduled_end across the pay period
+        pay_sync_period_auto_timeout($pdo, (string)$period['start_date'], (string)$period['end_date']);
+
         $salaryRows = $payroll->getAllSalaries();
 
         $generated = 0;
@@ -155,8 +230,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $attendanceStatement->execute([
               ':employee_id' => $employeeId,
-              ':start_date' => $period['start_date'],
-              ':end_date' => $period['end_date'],
+              ':start_date'  => $period['start_date'],
+              ':end_date'    => $period['end_date'],
             ]);
 
             $attendance = $attendanceStatement->fetch(
@@ -172,11 +247,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               $attendance['days_worked'] ?? 0
             );
 
-            $workedHours = (float)(
+            $baseWorkedHours = (float)(
               $attendance['worked_hours'] ?? 0
             );
 
-            if ($daysWorked <= 0) {
+            $overtimeHours = pay_get_approved_overtime_hours(
+              $pdo,
+              $employeeId,
+              (string)$period['start_date'],
+              (string)$period['end_date']
+            );
+
+            // Total worked hours includes regular worked hours + HR-approved overtime hours
+            $workedHours = round($baseWorkedHours + $overtimeHours, 4);
+
+            if ($daysWorked <= 0 && $overtimeHours <= 0) {
               $skipped++;
 
               continue;
@@ -186,8 +271,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               0,
               $workingDays - $daysWorked
             );
-
-
 
             $lateStatement = $pdo->prepare(
               "SELECT
@@ -207,47 +290,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $lateStatement->execute([
               ':employee_id' => $employeeId,
-              ':start_date' => $period['start_date'],
-              ':end_date' => $period['end_date'],
+              ':start_date'  => $period['start_date'],
+              ':end_date'    => $period['end_date'],
             ]);
 
             $lateRecords = $lateStatement->fetchAll(
               PDO::FETCH_ASSOC
-            );
-
-            $overtimeHours = 0.0;
-
-            foreach ($lateRecords as $lateRecord) {
-              // Late records contain only lateness.
-              // Overtime is calculated separately below.
-            }
-
-            $overtimeStatement = $pdo->prepare(
-              "SELECT
-                  COALESCE(
-                    SUM(
-                      CASE
-                        WHEN overtime_status = 'APPROVED' THEN COALESCE(overtime_hours, 0)
-                        WHEN overtime_status IS NULL THEN GREATEST(COALESCE(workhours, 0) - 8, 0)
-                        ELSE 0
-                      END
-                    ),
-                    0
-                  ) AS overtime_hours
-               FROM attendance
-               WHERE employee_id = :employee_id
-                 AND time_in IS NOT NULL
-                 AND DATE(time_in) BETWEEN :start_date AND :end_date"
-            );
-
-            $overtimeStatement->execute([
-              ':employee_id' => $employeeId,
-              ':start_date' => $period['start_date'],
-              ':end_date' => $period['end_date'],
-            ]);
-
-            $overtimeHours = (float)(
-              $overtimeStatement->fetchColumn() ?? 0
             );
 
             $command = new GeneratePayslipCommand(
@@ -773,7 +821,8 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
       <div class="card">
         <h3>Generate / Refresh Payslips</h3>
         <p class="muted" style="margin-bottom:12px">
-          Auto-computes pay from <strong>attendance</strong> and <strong>salaries</strong>
+          Auto-computes pay from <strong>attendance</strong>, <strong>auto-closed schedules</strong>,
+          <strong>HR-approved overtime</strong>, and <strong>salaries</strong>
           for <strong><?= htmlspecialchars($selPeriod['period_name']) ?></strong>
           (<?= htmlspecialchars($selPeriod['start_date']) ?> →
           <?= htmlspecialchars($selPeriod['end_date']) ?>).
