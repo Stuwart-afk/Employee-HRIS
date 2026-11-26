@@ -400,7 +400,7 @@
       "options": { "displayMode": "gradient", "minVizHeight": 10, "minVizWidth": 0, "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "showUnfilled": true },
       "title": "Real-time Events (last 1h)",
       "type": "bargauge",
-      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (type) (increase(hris_realtime_events_total[1h]))", "legendFormat": "{{type}}", "refId": "A", "instant": true }]
+      "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (type) (increase(hris_realtime_events_total[1h])) or sum by (type) (hris_realtime_events_total * 0)", "legendFormat": "{{type}}", "refId": "A", "instant": true }]
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -424,6 +424,6 @@
   "timezone": "Asia/Manila",
   "title": "HRIS Employee & Leave Dashboard",
   "uid": "hris-main-dashboard",
-  "version": 3
+  "version": 4
 }
 

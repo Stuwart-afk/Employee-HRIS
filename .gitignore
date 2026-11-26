@@ -10,3 +10,11 @@ node_modules/
 *.tfstate
 *.tfstate.*
 .terraform/
+
+# Terraform state
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Terraform generated files
+terraform/.generated/

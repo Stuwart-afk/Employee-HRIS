@@ -1,20 +1,20 @@
 <?php
 
 /**
- * Shared employee shell — mirrors the HR moonlit design system so the
- * employee portal matches the HR workspace exactly.
+- Shared employee shell — mirrors the HR moonlit design system so the
+- employee portal matches the HR workspace exactly.
  *
- * Pages set these before requiring this file (all optional):
- *   $title        string  Page title shown in the browser tab + topbar.
- *   $eyebrow      string  Small uppercase label above the topbar title.
- *   $subtitle     string  Short line under the topbar title.
- *   $pageCss      string  Base name of a per-page stylesheet in assets/css/pages.
- *   $user         array   ['full_name','email','avatar'] for the sidebar footer.
- *   $realtime     bool    When true, renders the realtime status badge + script.
- *   $topbarExtra  string  Extra HTML injected into the topbar actions area.
+- Pages set these before requiring this file (all optional):
+-   $title        string  Page title shown in the browser tab + topbar.
+-   $eyebrow      string  Small uppercase label above the topbar title.
+-   $subtitle     string  Short line under the topbar title.
+-   $pageCss      string  Base name of a per-page stylesheet in assets/css/pages.
+-   $user         array   ['full_name','email','avatar'] for the sidebar footer.
+-   $realtime     bool    When true, renders the realtime status badge + script.
+-   $topbarExtra  string  Extra HTML injected into the topbar actions area.
  *
- * This file only renders navigation and styles; each page keeps its own
- * request handling and database logic.
+- This file only renders navigation and styles; each page keeps its own
+- request handling and database logic.
  */
 
 require_once __DIR__ . '/../../classes/Rbac.php';
@@ -53,96 +53,86 @@ $isSupervisor = in_array(
   true
 );
 
-$isDepartmentManager = $employeeRank === 'manager';
+$isDepartmentManager =$employeeRank === 'manager';
 
 /*
- * Permission helpers for employee navigation.
- * Rank overrides are evaluated before system-role permissions.
+- Permission helpers for employee navigation.
+- Rank overrides are evaluated before system-role permissions.
  */
 $employeeCan = static function (
   string $module,
   string $ability
-) use ($pdo, $employeeRole, $employeeRank): bool {
-  return isset($pdo) &&
-    $pdo instanceof PDO &&
+) use ($pdo, $employeeRole,$employeeRank): bool {
+  return isset($pdo) &&$pdo instanceof PDO &&
     Rbac::can(
       $pdo,
-      $employeeRole,
-      $module,
-      $ability,
-      $employeeRank
+      $employeeRole,$module,
+      $ability,$employeeRank
     );
 };
 
 $employeeModuleEnabled = static function (
   string $module
-) use ($pdo, $employeeRole, $employeeRank): bool {
-  return isset($pdo) &&
-    $pdo instanceof PDO &&
+) use ($pdo, $employeeRole,$employeeRank): bool {
+  return isset($pdo) &&$pdo instanceof PDO &&
     Rbac::moduleEnabled(
-      $pdo,
-      $employeeRole,
-      $module,
-      $employeeRank
+      $pdo,$employeeRole,
+      $module,$employeeRank
     );
 };
 
 $currentPage = basename($_SERVER['PHP_SELF'] ?? 'dashboard.php', '.php');
 
 $pageTitles = [
-  'dashboard'     => 'Employee Dashboard',
-  'profile'       => 'My Profile',
-  'attendance'    => 'Attendance',
-  'file_leave'    => 'Leave Management',
-  'leave_history' => 'Leave History',
-  'leave_balance' => 'Leave Balance',
-  'payslips'      => 'Payslips',
-  'team' => 'My Team',
-  'team_leave' => 'Team Leave',
+  'dashboard'          => 'Employee Dashboard',
+  'profile'            => 'My Profile',
+  'attendance'         => 'Attendance',
+  'overtime'           => 'Overtime',
+  'file_leave'         => 'Leave Management',
+  'leave_history'      => 'Leave History',
+  'leave_balance'      => 'Leave Balance',
+  'payslips'           => 'Payslips',
+  'team'               => 'My Team',
+  'team_leave'         => 'Team Leave',
   'promotion_requests' => 'Promotion Recommendations',
-  'settings'      => 'Settings',
+  'settings'           => 'Settings',
 ];
-$pageTitle = $title ?? ($pageTitles[$currentPage] ?? 'Employee Portal');
-$eyebrowText = $eyebrow ?? 'EMPLOYEE PORTAL';
-$subtitleText = $subtitle ?? '';
+$pageTitle =$title ?? ($pageTitles[$currentPage] ?? 'Employee Portal');
+$eyebrowText =$eyebrow ?? 'EMPLOYEE PORTAL';
+$subtitleText =$subtitle ?? '';
 $cssPage = preg_replace('/[^a-z0-9_-]/', '', $pageCss ?? $currentPage);
 
 /*
- * Embedded mode: when a page is shown inside another page's iframe/panel
- * (e.g. Leave History inside the Leave Management slide-over), hide the
- * sidebar + topbar so the shell is not duplicated. A page opts in with
- * $embedded = true, or the request carries ?embedded=1.
+- Embedded mode: when a page is shown inside another page's iframe/panel
+- (e.g. Leave History inside the Leave Management slide-over), hide the
+- sidebar + topbar so the shell is not duplicated. A page opts in with
+- $embedded = true, or the request carries ?embedded=1.
  */
 $embedded = !empty($embedded) || (($_GET['embedded'] ?? '') === '1');
 
-$navUser = $user ?? [];
-$navName = $navUser['full_name'] ?? ($navUser['name'] ?? 'Employee');
-$navEmail = $navUser['email'] ?? '';
-$navAvatar = $navUser['avatar'] ?? ('https://ui-avatars.com/api/?name=' . urlencode($navName) . '&background=4763ff&color=fff');
+$navUser =$user ?? [];
+$navName =$navUser['full_name'] ?? ($navUser['name'] ?? 'Employee');$navEmail = $navUser['email'] ?? '';$navAvatar = $navUser['avatar'] ?? ('https://ui-avatars.com/api/?name=' . urlencode($navName) . '&background=4763ff&color=fff');
 $navInitials = strtoupper(mb_substr($navName, 0, 2));
 
 /*
- * Pocket Profile data. So the "About Me" pop-up shows the SAME full details
- * (ID, name, email, phone, status) on EVERY page — not just the profile page —
- * fetch the employee record here when the page didn't already provide it.
+- Pocket Profile data. So the "About Me" pop-up shows the SAME full details
+- (ID, name, email, phone, status) on EVERY page — not just the profile page —
+- fetch the employee record here when the page didn't already provide it.
  */
-if (!isset($pocketProfile) || !is_array($pocketProfile)) {
-  $pocketProfile = [];
-  $__empId = $_SESSION['employee_id'] ?? null;
-  if ($__empId && isset($pdo) && $pdo instanceof PDO) {
+if (!isset($pocketProfile) || !is_array($pocketProfile)) {$pocketProfile = [];
+  $__empId =$_SESSION['employee_id'] ?? null;
+  if ($__empId && isset($pdo) &&$pdo instanceof PDO) {
     try {
       require_once __DIR__ . '/../../classes/Avatar.php';
       Avatar::ensureColumn($pdo);
-      $__ps = $pdo->prepare(
+      $__ps =$pdo->prepare(
         'SELECT id, first_name, last_name, email, phone, employment_status, avatar
                  FROM employees WHERE id = :id LIMIT 1'
       );
-      $__ps->execute([':id' => $__empId]);
-      $__emp = $__ps->fetch(PDO::FETCH_ASSOC);
+      $__ps->execute([':id' =>$__empId]);
+      $__emp =$__ps->fetch(PDO::FETCH_ASSOC);
       if ($__emp) {
-        $__full = trim(($__emp['first_name'] ?? '') . ' ' . ($__emp['last_name'] ?? ''));
-        $__avatarUrl = Avatar::url($__emp);
-        $pocketProfile = [
+        $__full = trim(($__emp['first_name'] ?? '') . ' ' . ($__emp['last_name'] ?? ''));$__avatarUrl = Avatar::url($__emp);$pocketProfile = [
           'id'     => $__emp['id'],
           'name'   => $__full,
           'email'  => $__emp['email'] ?? $navEmail,
@@ -151,14 +141,14 @@ if (!isset($pocketProfile) || !is_array($pocketProfile)) {
           'avatar' => $__avatarUrl,
         ];
         // Sidebar avatar shows the uploaded photo too.
-        $navAvatar = $__avatarUrl;
+        $navAvatar =$__avatarUrl;
         // Keep the sidebar identity in sync if the page didn't set it.
-        if (($navUser['full_name'] ?? '') === '' && $__full !== '') {
-          $navName = $__full;
+        if (($navUser['full_name'] ?? '') === '' &&$__full !== '') {
+          $navName =$__full;
           $navInitials = strtoupper(mb_substr($__full, 0, 2));
         }
         if ($navEmail === '') {
-          $navEmail = $__emp['email'] ?? '';
+          $navEmail =$__emp['email'] ?? '';
         }
       }
     } catch (Throwable $e) {
@@ -170,12 +160,12 @@ if (!isset($pocketProfile) || !is_array($pocketProfile)) {
 // Leave pages share one "active" state in the sidebar.
 $leavePages = ['file_leave', 'leave_history', 'leave_balance'];
 
-function emp_nav_active($page, $current): string
+function emp_nav_active($page,$current): string
 {
   if (is_array($page)) {
-    return in_array($current, $page, true) ? 'active' : '';
+    return in_array($current,$page, true) ? 'active' : '';
   }
-  return $page === $current ? 'active' : '';
+  return $page ===$current ? 'active' : '';
 }
 ?>
 <!DOCTYPE html>
@@ -200,7 +190,7 @@ function emp_nav_active($page, $current): string
   <script src="/templates/employeeTemplates/sidebar.js" defer></script>
 </head>
 
-<body class="hris-app page-<?= htmlspecialchars($cssPage, ENT_QUOTES, 'UTF-8') ?><?= $embedded ? ' is-embedded' : '' ?>">
+<body class="hris-app page-<?= htmlspecialchars($cssPage, ENT_QUOTES, 'UTF-8') ?><?=$embedded ? ' is-embedded' : '' ?>">
   <?php if (!$embedded): ?>
     <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
   <?php endif; ?>
@@ -213,7 +203,8 @@ function emp_nav_active($page, $current): string
         <a class="nav-item <?= emp_nav_active('dashboard', $currentPage) ?>" href="/employee/dashboard.php"><span class="nav-icon">▦</span><span>Dashboard</span></a>
         <a class="nav-item <?= emp_nav_active('profile', $currentPage) ?>" href="/employee/profile.php"><span class="nav-icon">◉</span><span>My Profile</span></a>
         <a class="nav-item <?= emp_nav_active('attendance', $currentPage) ?>" href="/employee/attendance.php"><span class="nav-icon">◷</span><span>Attendance</span></a>
-        <a class="nav-item <?= emp_nav_active($leavePages, $currentPage) ?>" href="/employee/file_leave.php"><span class="nav-icon">▤</span><span>Leave</span></a>
+        <a class="nav-item <?= emp_nav_active($leavePages,$currentPage) ?>" href="/employee/file_leave.php"><span class="nav-icon">▤</span><span>Leave</span></a>
+        <a class="nav-item <?= emp_nav_active('overtime', $currentPage) ?>" href="/employee/overtime.php"><span class="nav-icon">⏱</span><span>Overtime</span></a>
         <a class="nav-item <?= emp_nav_active('payslips', $currentPage) ?>" href="/employee/payslips.php"><span class="nav-icon">▦</span><span>Payslips</span></a>
         <?php if ($isSupervisor): ?>
 
