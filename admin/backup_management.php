@@ -325,12 +325,7 @@ foreach ($activityDates as $activity) {
          PAGE TITLE
     ======================================= -->
 
-    <div class="backup-page-title">
-        <div>
-            <h1>Backup Management</h1>
-            <p>Manage and monitor your HRIS database backups.</p>
-        </div>
-    </div>
+
 
     <!-- ======================================
          BACKUP ACTIONS
@@ -416,6 +411,7 @@ foreach ($activityDates as $activity) {
         </div>
 
         <!-- CREATE BACKUP -->
+        <!-- CREATE BACKUP -->
         <div class="backup-create-card">
 
             <div class="backup-create-content">
@@ -429,15 +425,78 @@ foreach ($activityDates as $activity) {
                 </div>
             </div>
 
-            <form method="POST" action="/admin/backup/create">
+            <form
+                method="POST"
+                action="/admin/backup/create"
+                id="createBackupForm">
+
                 <?= csrf_field() ?>
 
-                <button type="submit" class="backup-create-button">
+                <button
+                    type="button"
+                    class="backup-create-button"
+                    id="openCreateBackupConfirmation">
+
                     <i class="fas fa-database"></i>
                     Create Backup Now
+
                 </button>
+
             </form>
 
+        </div>
+        <!-- CREATE BACKUP CONFIRMATION -->
+        <div
+            class="backup-modal"
+            id="createBackupConfirmationModal"
+            aria-hidden="true">
+
+            <div class="backup-modal-overlay" data-close-modal></div>
+
+            <div
+                class="backup-modal-content"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="createBackupConfirmationTitle">
+
+                <div class="backup-modal-icon">
+                    <i class="fas fa-database"></i>
+                </div>
+
+                <h2 id="createBackupConfirmationTitle">
+                    Create Database Backup?
+                </h2>
+
+                <p>
+                    This will generate a new backup of your current HRIS database.
+                </p>
+
+                <div class="backup-safety-note">
+                    Your existing backups will not be replaced by this operation.
+                </div>
+
+                <div class="backup-modal-actions">
+
+                    <button
+                        type="button"
+                        class="backup-modal-cancel"
+                        data-close-modal>
+                        Cancel
+                    </button>
+
+                    <button
+                        type="button"
+                        class="backup-modal-confirm"
+                        id="confirmCreateBackupButton">
+
+                        <i class="fas fa-database"></i>
+                        Create Backup
+
+                    </button>
+
+                </div>
+
+            </div>
         </div>
 
     </section>
@@ -1077,7 +1136,7 @@ foreach ($activityDates as $activity) {
 
             <form
                 id="automaticBackupPlanForm"
-                action="/admin/backup/save_settings.php"
+                action="/admin/backup/save_settings"
                 method="POST">
 
                 <?= csrf_field() ?>
@@ -1617,9 +1676,66 @@ foreach ($activityDates as $activity) {
             modal.setAttribute('aria-hidden', 'true');
         }
 
+        // ==========================================
+        // CREATE BACKUP CONFIRMATION
+        // ==========================================
+
+        const createBackupForm = document.getElementById('createBackupForm');
+
+        const openCreateBackupConfirmation = document.getElementById(
+            'openCreateBackupConfirmation'
+        );
+
+        const createBackupConfirmationModal = document.getElementById(
+            'createBackupConfirmationModal'
+        );
+
+        const confirmCreateBackupButton = document.getElementById(
+            'confirmCreateBackupButton'
+        );
+
+        if (
+            createBackupForm &&
+            openCreateBackupConfirmation &&
+            createBackupConfirmationModal &&
+            confirmCreateBackupButton
+        ) {
+
+            // Open confirmation.
+            openCreateBackupConfirmation.addEventListener('click', function() {
+
+                openModal(createBackupConfirmationModal);
+
+            });
+
+            // Submit only after confirmation.
+            confirmCreateBackupButton.addEventListener('click', function() {
+
+                if (createBackupForm.dataset.submitting === 'true') {
+                    return;
+                }
+
+                createBackupForm.dataset.submitting = 'true';
+
+                confirmCreateBackupButton.disabled = true;
+
+                confirmCreateBackupButton.innerHTML =
+                    '<i class="fas fa-spinner fa-spin"></i> Creating Backup...';
+
+                openCreateBackupConfirmation.disabled = true;
+
+                openCreateBackupConfirmation.innerHTML =
+                    '<i class="fas fa-spinner fa-spin"></i> Creating Backup...';
+
+                createBackupForm.submit();
+
+            });
+
+        }
+
 
         // ==========================================
-        // AUTOMATIC BACKUP PLAN MODAL
+        // AUTOMATIC BACKUP PLAN
         // ==========================================
 
         const backupFrequency = document.getElementById('backupFrequency');
@@ -1636,24 +1752,69 @@ foreach ($activityDates as $activity) {
             'automaticBackupPlanForm'
         );
 
+        const saveBackupPlanButton = document.getElementById(
+            'saveBackupPlanButton'
+        );
+
         function updateBackupFrequencyFields() {
+
+            if (!backupFrequency) return;
 
             const frequency = backupFrequency.value;
 
-            hourlySettings.hidden = frequency !== 'hourly';
+            if (hourlySettings) {
+                hourlySettings.hidden = frequency !== 'hourly';
+            }
 
-            backupTimeSettings.hidden = frequency === 'hourly';
+            if (backupTimeSettings) {
+                backupTimeSettings.hidden = frequency === 'hourly';
+            }
 
-            weeklySettings.hidden = frequency !== 'weekly';
+            if (weeklySettings) {
+                weeklySettings.hidden = frequency !== 'weekly';
+            }
         }
 
-        backupFrequency.addEventListener(
-            'change',
-            updateBackupFrequencyFields
-        );
+        // Update when frequency changes.
+        if (backupFrequency) {
 
-        // Display the correct fields when the modal/page loads.
-        updateBackupFrequencyFields();
+            backupFrequency.addEventListener(
+                'change',
+                updateBackupFrequencyFields
+            );
+
+            updateBackupFrequencyFields();
+        }
+
+        // Prevent duplicate form submissions.
+        if (automaticBackupPlanForm) {
+
+            automaticBackupPlanForm.addEventListener('submit', function(event) {
+
+                if (!automaticBackupPlanForm.checkValidity()) {
+                    event.preventDefault();
+                    automaticBackupPlanForm.reportValidity();
+                    return;
+                }
+
+                if (automaticBackupPlanForm.dataset.submitting === 'true') {
+                    event.preventDefault();
+                    return;
+                }
+
+                automaticBackupPlanForm.dataset.submitting = 'true';
+
+                if (saveBackupPlanButton) {
+
+                    saveBackupPlanButton.disabled = true;
+
+                    saveBackupPlanButton.innerHTML =
+                        '<i class="fas fa-spinner fa-spin"></i> Saving Settings...';
+                }
+
+            });
+
+        }
 
         // ==========================================
         // BACKUP CREATION RESULT MODAL
@@ -1814,9 +1975,6 @@ foreach ($activityDates as $activity) {
             });
 
         });
-        if (!restoreForm) {
-            return;
-        }
 
         const hasNormalBackups = rows.length > 0;
 
