@@ -6,8 +6,9 @@ set -Eeuo pipefail
 BACKUP_DIR="/backups"
 REQUEST_DIR="/requests"
 RESTORE_TEST_DB="hris_restore_test"
+BACKUP_METADATA_DB="${BACKUP_METADATA_DB:-hris_backup_metadata}"
 
-RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
 INTERVAL="${BACKUP_INTERVAL_SECONDS:-86400}"
 POLL_INTERVAL=2
 
@@ -227,6 +228,15 @@ perform_live_restore() {
 
     CURRENT_RESTORE_REQUEST_ID="$request_id"
     SAFETY_BACKUP_FILENAME=""
+    local restore_history_id
+
+restore_history_id=$(create_restore_history_record "$request_id" "$filename") || {
+    failure_message="Could not create restore history. Live database was not changed."
+    finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
+    return 1
+}
+
+log "Restore history ID: ${restore_history_id}"
 
     export MYSQL_PWD="$DB_PASSWORD"
 
@@ -243,21 +253,21 @@ perform_live_restore() {
 
     if [[ ! "$filename" =~ ^(hris_backup|hris_pre_restore)_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\.sql\.gz$ ]]; then
         failure_message="Invalid backup filename."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
 
     if [[ ! -f "$backup_file" ]] || ! gzip -t "$backup_file"; then
         failure_message="The selected backup is missing or corrupted."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
 
     if ! cleanup_restore_database "$RESTORE_TEST_DB"; then
         failure_message="Could not prepare the restore test database."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
@@ -265,7 +275,7 @@ perform_live_restore() {
     if ! import_backup_to_database "$filename" "$RESTORE_TEST_DB"; then
         cleanup_restore_database "$RESTORE_TEST_DB" || true
         failure_message="The selected backup could not be imported during preflight."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
@@ -273,14 +283,14 @@ perform_live_restore() {
     if ! validate_restore_database "$RESTORE_TEST_DB"; then
         cleanup_restore_database "$RESTORE_TEST_DB" || true
         failure_message="The selected backup failed preflight validation."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
 
     if ! cleanup_restore_database "$RESTORE_TEST_DB"; then
         failure_message="Could not clean the restore test database."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
@@ -293,10 +303,16 @@ perform_live_restore() {
 
     if ! create_safety_backup; then
         failure_message="Could not create a safety backup. Live database was not changed."
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
+    if ! record_safety_backup_history "$restore_history_id" "$SAFETY_BACKUP_FILENAME"; then
+    failure_message="Safety backup was created, but its history could not be recorded. Live database was not changed."
+    finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
+    unset MYSQL_PWD
+    return 1
+fi
 
     # Stage 3: Replace live database contents.
     write_request_progress \
@@ -311,7 +327,7 @@ perform_live_restore() {
         else
             failure_message="Live restore could not proceed. The previous database was successfully recovered."
         fi
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
@@ -322,7 +338,7 @@ perform_live_restore() {
         else
             failure_message="Live import failed. The previous database was successfully recovered."
         fi
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
@@ -339,7 +355,7 @@ perform_live_restore() {
         else
             failure_message="Live validation failed. The previous database was successfully recovered."
         fi
-        write_request_result "$request_id" "failed" "$filename" "$failure_message"
+        finish_restore_operation "$request_id" "failed" "$filename" "$failure_message"
         unset MYSQL_PWD
         return 1
     fi
@@ -350,11 +366,11 @@ perform_live_restore() {
     log "Safety backup: ${SAFETY_BACKUP_FILENAME}"
     log "=========================================="
 
-    write_request_result \
-        "$request_id" \
-        "success" \
-        "$filename" \
-        "Database restoration completed and live database validation passed."
+    finish_restore_operation \
+    "$request_id" \
+    "success" \
+    "$filename" \
+    "Database restoration completed and live database validation passed."
 
     unset MYSQL_PWD
     return 0
@@ -894,7 +910,7 @@ load_backup_settings() {
 
     export MYSQL_PWD="$DB_PASSWORD"
 
-    if ! settings=$(mysql_command "$DB_NAME" \
+    if ! settings=$(mysql_command "$BACKUP_METADATA_DB" \
         --batch \
         --skip-column-names \
         --raw \
@@ -1015,7 +1031,7 @@ record_backup_attempt() {
 
     export MYSQL_PWD="$DB_PASSWORD"
 
-    if mysql_command "$DB_NAME" \
+    if mysql_command "$BACKUP_METADATA_DB" \
         --execute="
             UPDATE backup_settings
             SET last_run_at = '${escaped_time}'
@@ -1030,6 +1046,230 @@ record_backup_attempt() {
     log "ERROR: Could not update last_run_at."
     return 1
 }
+
+# Create a database log when an automatic backup starts.
+record_automatic_backup_start() {
+    local scheduled_time="$1"
+    local escaped_time
+
+    escaped_time=$(printf '%s' "$scheduled_time" | sed "s/'/''/g")
+
+    export MYSQL_PWD="$DB_PASSWORD"
+
+    if mysql_command "$BACKUP_METADATA_DB" \
+        --execute="
+            INSERT IGNORE INTO automatic_backup_logs (
+                scheduled_for,
+                started_at,
+                status
+            )
+            VALUES (
+                '${escaped_time}',
+                NOW(),
+                'running'
+            );
+        "; then
+        unset MYSQL_PWD
+        return 0
+    fi
+
+    unset MYSQL_PWD
+    log "WARNING: Could not create automatic backup log."
+    return 1
+}
+
+
+# Update the automatic backup log after the backup finishes.
+record_automatic_backup_finish() {
+    local scheduled_time="$1"
+    local status="$2"
+    local filename="${3:-}"
+    local message="${4:-}"
+    local file_size="NULL"
+    local escaped_time
+    local escaped_filename
+    local escaped_message
+
+    escaped_time=$(printf '%s' "$scheduled_time" | sed "s/'/''/g")
+    escaped_filename=$(printf '%s' "$filename" | sed "s/'/''/g")
+    escaped_message=$(printf '%s' "$message" | sed "s/'/''/g")
+
+    if [[ "$status" == "success" && -n "$filename" && -f "${BACKUP_DIR}/${filename}" ]]; then
+        file_size=$(stat -c '%s' "${BACKUP_DIR}/${filename}")
+    fi
+
+    export MYSQL_PWD="$DB_PASSWORD"
+
+    if mysql_command "$BACKUP_METADATA_DB" \
+        --execute="
+            UPDATE automatic_backup_logs
+            SET
+                completed_at = NOW(),
+                status = '${status}',
+                filename = NULLIF('${escaped_filename}', ''),
+                file_size_bytes = ${file_size},
+                message = NULLIF('${escaped_message}', '')
+            WHERE scheduled_for = '${escaped_time}';
+        "; then
+        unset MYSQL_PWD
+        return 0
+    fi
+
+    unset MYSQL_PWD
+    log "WARNING: Could not update automatic backup log."
+    return 1
+}
+
+
+create_restore_history_record() {
+    local request_id="$1"
+    local filename="$2"
+    local escaped_request_id
+    local escaped_filename
+    local restore_history_id
+
+    escaped_request_id=$(printf '%s' "$request_id" | sed "s/'/''/g")
+    escaped_filename=$(printf '%s' "$filename" | sed "s/'/''/g")
+
+    export MYSQL_PWD="$DB_PASSWORD"
+
+    if ! mysql_command "$BACKUP_METADATA_DB" \
+        --execute="
+            INSERT INTO restore_history (
+                request_id,
+                selected_filename,
+                status,
+                started_at
+            )
+            VALUES (
+                '${escaped_request_id}',
+                '${escaped_filename}',
+                'running',
+                NOW()
+            );
+        "; then
+        unset MYSQL_PWD
+        log "ERROR: Could not create restore history record."
+        return 1
+    fi
+
+    restore_history_id=$(mysql_command "$BACKUP_METADATA_DB" \
+        --batch \
+        --skip-column-names \
+        --execute="
+            SELECT id
+            FROM restore_history
+            WHERE request_id = '${escaped_request_id}'
+            LIMIT 1;
+        ") || {
+            unset MYSQL_PWD
+            return 1
+        }
+
+    unset MYSQL_PWD
+
+    if [[ ! "$restore_history_id" =~ ^[0-9]+$ ]]; then
+        log "ERROR: Could not retrieve restore history ID."
+        return 1
+    fi
+
+    printf '%s\n' "$restore_history_id"
+}
+
+
+update_restore_history() {
+    local request_id="$1"
+    local status="$2"
+    local message="$3"
+    local escaped_request_id
+    local escaped_message
+
+    escaped_request_id=$(printf '%s' "$request_id" | sed "s/'/''/g")
+    escaped_message=$(printf '%s' "$message" | sed "s/'/''/g")
+
+    export MYSQL_PWD="$DB_PASSWORD"
+
+    if ! mysql_command "$BACKUP_METADATA_DB" \
+        --execute="
+            UPDATE restore_history
+            SET
+                status = '${status}',
+                completed_at = NOW(),
+                message = '${escaped_message}'
+            WHERE request_id = '${escaped_request_id}';
+        "; then
+        unset MYSQL_PWD
+        log "WARNING: Could not update restore history."
+        return 1
+    fi
+
+    unset MYSQL_PWD
+    return 0
+}
+
+record_safety_backup_history() {
+    local restore_history_id="$1"
+    local filename="$2"
+    local file_path="${BACKUP_DIR}/${filename}"
+    local file_size
+    local escaped_filename
+
+    if [[ ! -f "$file_path" ]]; then
+        log "ERROR: Safety backup file does not exist: ${filename}"
+        return 1
+    fi
+
+    file_size=$(stat -c '%s' "$file_path") || return 1
+    escaped_filename=$(printf '%s' "$filename" | sed "s/'/''/g")
+
+    export MYSQL_PWD="$DB_PASSWORD"
+
+    if ! mysql_command "$BACKUP_METADATA_DB" \
+        --execute="
+            START TRANSACTION;
+
+            UPDATE restore_history
+            SET safety_filename = '${escaped_filename}'
+            WHERE id = ${restore_history_id};
+
+            INSERT INTO safety_backups (
+                restore_history_id,
+                filename,
+                file_size_bytes
+            )
+            VALUES (
+                ${restore_history_id},
+                '${escaped_filename}',
+                ${file_size}
+            );
+
+            COMMIT;
+        "; then
+        unset MYSQL_PWD
+        log "ERROR: Could not record safety backup history."
+        return 1
+    fi
+
+    unset MYSQL_PWD
+
+    log "Safety backup history recorded: ${filename}"
+    return 0
+}
+
+finish_restore_operation() {
+    local request_id="$1"
+    local status="$2"
+    local filename="$3"
+    local message="$4"
+
+    if ! update_restore_history "$request_id" "$status" "$message"; then
+        log "WARNING: Restore history completion could not be saved."
+    fi
+
+    write_request_result "$request_id" "$status" "$filename" "$message"
+}
+
+
 
 
 mkdir -p "$BACKUP_DIR" "$REQUEST_DIR"
@@ -1073,22 +1313,43 @@ while true; do
 
                 if is_backup_due "$CURRENT_MINUTE"; then
 
-                    SCHEDULED_TIME="${CURRENT_MINUTE}:00"
+    SCHEDULED_TIME="${CURRENT_MINUTE}:00"
 
-                    log "Configured automatic backup time reached."
-                    log "Scheduled occurrence: ${SCHEDULED_TIME}"
+    log "Configured automatic backup time reached."
+    log "Scheduled occurrence: ${SCHEDULED_TIME}"
 
-                    if perform_backup "automatic"; then
-                        log "Automatic backup completed successfully."
-                    else
-                        log "Automatic backup failed."
-                    fi
+    # Record the start of this scheduled occurrence.
+    if ! record_automatic_backup_start "$SCHEDULED_TIME"; then
+        log "WARNING: Automatic backup will continue without a start log."
+    fi
 
-                    # Prevent repeated execution for this occurrence.
-                    if ! record_backup_attempt "$SCHEDULED_TIME"; then
-                        log "WARNING: Could not record automatic backup attempt."
-                    fi
-                fi
+    if perform_backup "automatic"; then
+        log "Automatic backup completed successfully."
+
+        if ! record_automatic_backup_finish \
+            "$SCHEDULED_TIME" \
+            "success" \
+            "$BACKUP_RESULT_FILENAME" \
+            "Automatic backup completed successfully."; then
+            log "WARNING: Could not save automatic backup completion."
+        fi
+    else
+        log "Automatic backup failed."
+
+        if ! record_automatic_backup_finish \
+            "$SCHEDULED_TIME" \
+            "failed" \
+            "" \
+            "Automatic backup failed. Check the backup container logs for details."; then
+            log "WARNING: Could not save automatic backup failure."
+        fi
+    fi
+
+    # Prevent repeated execution for this occurrence.
+    if ! record_backup_attempt "$SCHEDULED_TIME"; then
+        log "WARNING: Could not record automatic backup attempt."
+    fi
+fi
             fi
         fi
     else
