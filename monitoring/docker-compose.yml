@@ -204,8 +204,13 @@ services:
       DB_PORT: "3306"
       DB_NAME: hris
       BACKUP_METADATA_DB: hris_backup_metadata
+
       DB_USER: hris_app
       DB_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+
+      MYSQL_ADMIN_USER: root
+      MYSQL_ADMIN_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+
       BACKUP_RETENTION_DAYS: "30"
       BACKUP_INTERVAL_SECONDS: "86400"
       
