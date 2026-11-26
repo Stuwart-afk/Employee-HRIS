@@ -8,7 +8,7 @@ REQUEST_DIR="/requests"
 RESTORE_TEST_DB="hris_restore_test"
 BACKUP_METADATA_DB="${BACKUP_METADATA_DB:-hris_backup_metadata}"
 
-RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
 INTERVAL="${BACKUP_INTERVAL_SECONDS:-86400}"
 POLL_INTERVAL=2
 
@@ -25,6 +25,15 @@ mysql_command() {
         --host="$DB_HOST" \
         --port="${DB_PORT:-3306}" \
         --user="$DB_USER" \
+        --default-character-set=utf8mb4 \
+        "$@"
+}
+mysql_admin_command() {
+    MYSQL_PWD="${MYSQL_ADMIN_PASSWORD:?MYSQL_ADMIN_PASSWORD is not configured}" \
+    mysql \
+        --host="$DB_HOST" \
+        --port="${DB_PORT:-3306}" \
+        --user="${MYSQL_ADMIN_USER:-root}" \
         --default-character-set=utf8mb4 \
         "$@"
 }
@@ -175,7 +184,17 @@ import_backup_to_database() {
 
     log "Importing ${filename} into ${database}..."
 
-    if gzip -dc "$backup_file" | mysql_command "$database"; then
+    if [[ "$database" == "$RESTORE_TEST_DB" ]]; then
+    if gzip -dc "$backup_file" | mysql_admin_command "$database"; then
+        log "Import completed: ${database}"
+        return 0
+    else
+        log "ERROR: Import failed: ${database}"
+        return 1
+    fi
+fi
+
+if gzip -dc "$backup_file" | mysql_command "$database"; then
         log "Import completed: ${database}"
         return 0
     else
@@ -499,7 +518,17 @@ cleanup_restore_database() {
 
     log "Cleaning database: ${database}"
 
-    # Phase 1: Drop views first.
+    # Ensure the approved database exists.
+    if ! mysql_admin_command --execute="
+        CREATE DATABASE IF NOT EXISTS \`${database}\`
+        CHARACTER SET utf8mb4
+        COLLATE utf8mb4_unicode_ci;
+    "; then
+        log "ERROR: Could not prepare database: ${database}"
+        return 1
+    fi
+
+    # Phase 1: Drop views.
     drop_sql="
         SELECT CONCAT(
             'DROP VIEW IF EXISTS \`',
@@ -512,8 +541,8 @@ cleanup_restore_database() {
 
     {
         echo "SET FOREIGN_KEY_CHECKS=0;"
-        mysql_command --batch --skip-column-names --raw --execute="$drop_sql"
-    } | mysql_command "$database" || return 1
+        mysql_admin_command --batch --skip-column-names --raw --execute="$drop_sql"
+    } | mysql_admin_command "$database" || return 1
 
     # Phase 2: Drop events.
     drop_sql="
@@ -528,8 +557,8 @@ cleanup_restore_database() {
 
     {
         echo "SET FOREIGN_KEY_CHECKS=0;"
-        mysql_command --batch --skip-column-names --raw --execute="$drop_sql"
-    } | mysql_command "$database" || return 1
+        mysql_admin_command --batch --skip-column-names --raw --execute="$drop_sql"
+    } | mysql_admin_command "$database" || return 1
 
     # Phase 3: Drop stored procedures and functions.
     drop_sql="
@@ -546,10 +575,10 @@ cleanup_restore_database() {
 
     {
         echo "SET FOREIGN_KEY_CHECKS=0;"
-        mysql_command --batch --skip-column-names --raw --execute="$drop_sql"
-    } | mysql_command "$database" || return 1
+        mysql_admin_command --batch --skip-column-names --raw --execute="$drop_sql"
+    } | mysql_admin_command "$database" || return 1
 
-    # Phase 4: Drop base tables last.
+    # Phase 4: Drop base tables.
     drop_sql="
         SELECT CONCAT(
             'DROP TABLE IF EXISTS \`',
@@ -563,8 +592,8 @@ cleanup_restore_database() {
 
     {
         echo "SET FOREIGN_KEY_CHECKS=0;"
-        mysql_command --batch --skip-column-names --raw --execute="$drop_sql"
-    } | mysql_command "$database" || return 1
+        mysql_admin_command --batch --skip-column-names --raw --execute="$drop_sql"
+    } | mysql_admin_command "$database" || return 1
 
     log "Database cleanup completed: ${database}"
 }
@@ -572,6 +601,7 @@ cleanup_restore_database() {
 
 
 # Validate tables, columns, and record queries in an approved schema.
+
 validate_restore_database() {
     local database="$1"
     local table_query
@@ -582,8 +612,13 @@ validate_restore_database() {
     local row_count
     local total_records=0
     local total_tables=0
+    local mysql_runner="mysql_command"
 
     validate_restore_database_name "$database" || return 1
+
+    if [[ "$database" == "$RESTORE_TEST_DB" ]]; then
+        mysql_runner="mysql_admin_command"
+    fi
 
     log "Starting database validation: ${database}"
 
@@ -596,7 +631,7 @@ validate_restore_database() {
     "
 
     if ! table_list=$(
-        mysql_command \
+        "$mysql_runner" \
             --batch \
             --skip-column-names \
             --raw \
@@ -612,7 +647,6 @@ validate_restore_database() {
     fi
 
     while IFS= read -r table; do
-
         [[ -z "$table" ]] && continue
 
         escaped_table=$(printf '%s' "$table" | sed 's/`/``/g')
@@ -620,7 +654,7 @@ validate_restore_database() {
         log "Validating table: ${table}"
 
         if ! column_count=$(
-            mysql_command "$database" \
+            "$mysql_runner" "$database" \
                 --batch \
                 --skip-column-names \
                 --execute="SHOW COLUMNS FROM \`${escaped_table}\`;" |
@@ -636,7 +670,7 @@ validate_restore_database() {
         fi
 
         if ! row_count=$(
-            mysql_command "$database" \
+            "$mysql_runner" "$database" \
                 --batch \
                 --skip-column-names \
                 --execute="SELECT COUNT(*) FROM \`${escaped_table}\`;"
@@ -670,6 +704,7 @@ validate_restore_database() {
 
     return 0
 }
+
 
 
 # Compatibility wrappers for the existing restore-test workflow.
@@ -721,7 +756,7 @@ perform_restore_test() {
 
     log "Importing backup into ${RESTORE_TEST_DB}..."
 
-    if gzip -dc "$backup_file" | mysql_command "$RESTORE_TEST_DB"; then
+    if gzip -dc "$backup_file" | mysql_admin_command "$RESTORE_TEST_DB"; then
         log "SQL import completed successfully."
     else
         import_status=1
