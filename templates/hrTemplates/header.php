@@ -1,4 +1,3 @@
-
 <?php
 // templates/hrTemplates/header.php
 
@@ -83,6 +82,7 @@ $pageTitles = [
     'daily_attendance' => 'Daily Attendance',
     'attendance_records' => 'Attendance Records',
     'late_absence_monitoring' => 'Late and Absence Monitoring',
+    'overtime' => 'Overtime Management',
     'attendance_reports' => 'Attendance Reports',
     'schedule_management' => 'Schedule Management',
 
@@ -96,9 +96,10 @@ $pageTitles = [
     'leave_management' => 'Leave Management',
     'leave_requests' => 'Team Leave Requests',
 
-    'report' => 'Reports & Audits',
+    'report' => 'Reports',
     'payroll' => 'Payroll Management',
     'payslip_view' => 'Payslip',
+    'benefits' => 'Benefits & Separation Pay',
 
     'users' => 'User Management',
     'create_user' => 'Create User',
@@ -116,6 +117,7 @@ $defaultCssSlug = in_array(
         'daily_attendance',
         'attendance_records',
         'late_absence_monitoring',
+        'overtime',
         'attendance_reports'
     ],
     true
@@ -133,6 +135,7 @@ $attendancePages = [
     'daily_attendance',
     'attendance_records',
     'late_absence_monitoring',
+    'overtime',
     'attendance_reports',
     'schedule_management'
 ];
@@ -244,6 +247,14 @@ $navItems = [
     ],
 
     [
+        '/hr/benefits.php',
+        'Benefits & Separation',
+        '✦',
+        ['benefits'],
+        $isHrSide && $navModuleEnabled('payroll')
+    ],
+
+    [
         '/hr/promotion_requests.php',
         'Promotion Approvals',
         '↗',
@@ -253,7 +264,7 @@ $navItems = [
 
     [
         '/hr/report.php',
-        'Reports & Audits',
+        'Reports',
         '▥',
         ['report'],
         $isHrSide && $navModuleEnabled('reports')
@@ -748,13 +759,8 @@ $navHome = function_exists('role_home')
                             </a>
 
                             <a
-                                href="/hr/attendance.php?tab=logs"
-                                class="nav-link <?= (
-                                    $currentPage === 'attendance'
-                                    && $curTab === 'logs'
-                                    && $curRange === ''
-                                    && $curQ === ''
-                                ) ? 'active' : '' ?>">
+                                href="/hr/overtime.php"
+                                class="nav-link <?= $currentPage === 'overtime' ? 'active' : '' ?>">
                                 ⏱️ Overtime Management
                             </a>
 
@@ -1005,6 +1011,7 @@ $navHome = function_exists('role_home')
                 currentPath.endsWith('/hr/daily_attendance.php') ||
                 currentPath.endsWith('/hr/attendance_records.php') ||
                 currentPath.endsWith('/hr/late_absence_monitoring.php') ||
+                currentPath.endsWith('/hr/overtime.php') ||
                 currentPath.endsWith('/hr/attendance_reports.php') ||
                 currentPath.endsWith('/hr/schedule_management.php');
 

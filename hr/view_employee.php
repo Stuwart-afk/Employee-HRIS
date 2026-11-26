@@ -5,13 +5,76 @@ require_access('employee_records', 'view', 'all');
 
 require __DIR__ . '/../config/database.php';
 require __DIR__ . '/../classes/Employee.php';
+require __DIR__ . '/../classes/Department.php';
+require __DIR__ . '/../classes/Position.php';
 require_once __DIR__ . '/../config/helpers.php';
 
 $employeeModel = new Employee($pdo);
 
-$id = isset($_GET['id']) && ctype_digit($_GET['id']) 
-    ? (int) $_GET['id'] 
+$id = isset($_GET['id']) && ctype_digit((string)$_GET['id'])
+    ? (int) $_GET['id']
     : 0;
+
+$isAjax = (isset($_GET['ajax']) && $_GET['ajax'] === '1')
+    || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower((string)$_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest');
+
+if ($isAjax) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+
+    if ($id <= 0) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Invalid employee ID.']);
+        exit;
+    }
+
+    try {
+        $emp = $employeeModel->findById($id);
+        if (!$emp) {
+            http_response_code(404);
+            echo json_encode(['ok' => false, 'error' => 'Employee not found.']);
+            exit;
+        }
+
+        $departmentModel = new Department($pdo);
+        $positionModel   = new Position($pdo);
+
+        $departments = $departmentModel->getActive();
+        $positions   = $positionModel->getActive();
+
+        // Keep currently assigned department/position in dropdown even if inactive
+        if (!empty($emp['department_id']) && !in_array((int)$emp['department_id'], array_map('intval', array_column($departments, 'id')), true)) {
+            $s = $pdo->prepare("SELECT id, name, status FROM departments WHERE id = ? LIMIT 1");
+            $s->execute([(int)$emp['department_id']]);
+            if ($row = $s->fetch(PDO::FETCH_ASSOC)) {
+                $departments[] = ['id' => $row['id'], 'name' => $row['name'] . ' (Inactive)', 'status' => $row['status']];
+            }
+        }
+        if (!empty($emp['position_id']) && !in_array((int)$emp['position_id'], array_map('intval', array_column($positions, 'id')), true)) {
+            $s = $pdo->prepare("SELECT id, title, status FROM positions WHERE id = ? LIMIT 1");
+            $s->execute([(int)$emp['position_id']]);
+            if ($row = $s->fetch(PDO::FETCH_ASSOC)) {
+                $positions[] = ['id' => $row['id'], 'title' => $row['title'] . ' (Inactive)', 'status' => $row['status']];
+            }
+        }
+
+        $managers = $employeeModel->getManagerOptions(isset($emp['manager_id']) ? (int)$emp['manager_id'] : null);
+        $emp['rank_label'] = function_exists('rank_label') ? rank_label($emp['rank'] ?? 'employee') : ($emp['rank'] ?? 'employee');
+
+        echo json_encode([
+            'ok'          => true,
+            'employee'    => $emp,
+            'departments' => $departments,
+            'positions'   => $positions,
+            'managers'    => $managers,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'Unable to load employee profile.']);
+    }
+    exit;
+}
+
 if ($id <= 0) {
     header('Location: /hr/employees.php');
     exit;
@@ -29,71 +92,14 @@ if (!$emp) {
     exit;
 }
 
-function v($x): string {
-    $s = ($x !== null && $x !== '')
-    ? (string) $x
-    : 'N/A';
-    return htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
-}
-
-$fullname = trim(
-    ($emp['first_name'] ?? '') . ' ' . 
-    ((isset($emp['middle_name']) && $emp['middle_name'] !== '') 
-    ? $emp['middle_name'] . ' ' 
-    : '') . 
-    ($emp['last_name'] ?? '') .
-    ((isset($emp['suffix']) && $emp['suffix'] !== '') 
-    ? ' ' . $emp['suffix'] 
-    : '')
-
-);
-
-$dob = !empty($emp['date_of_birth'])
-    ? date('F j, Y', strtotime($emp['date_of_birth']))
-    : null;
-$hired = !empty($emp['date_hired'])
-    ? date('F j, Y', strtotime($emp['date_hired']))
-    : null;
-
 require __DIR__ . '/../templates/hrTemplates/header.php';
+require __DIR__ . '/../templates/hrTemplates/employee_modals.php';
 ?>
 
-<h1>Employee Profile</h1>
+<p><a href="/hr/employees.php">← Back to Employees</a></p>
 
-<p>
-    <strong><?= v($emp['employee_id']) ?></strong>
-    <?= v($fullname) ?>
-    <em><?= v($emp['employment_status']) ?></em>
-    <?= rank_badge($emp['rank'] ?? 'employee') ?>
-</p>
-
-<h2>Personal Information</h2>
-<ul>
-    <li>Fullname:      <?= v($fullname) ?></li>
-    <li>Date of Birth: <?= v($dob) ?></li>
-    <li>Gender:        <?= v($emp['gender']) ?></li>
-    <li>Phone:         <?= v($emp['phone']) ?></li>
-    <li>Email:         <?=  v($emp['email']) ?></li>
-    <li>Address:       <?= v($emp['address']) ?></li>
-</ul>
-
-<h2>Employment Information</h2>
-<ul>
-    <li>Department:      <?= v($emp['department_name']?? null) ?></li>
-    <li>Postion:         <?= v($emp['position_title'] ?? null) ?></li>
-    <li>Rank:            <?= v(rank_label($emp['rank'] ?? 'employee')) ?></li>
-    <li>Date Hired:      <?= v($hired) ?></li>
-    <li>Employment Type: <?= v($emp['employment_type'] ?? null) ?></li>
-    <li>Status:          <?= v($emp['employment_status'] ?? null) ?></li>
-</ul>
-<?php if (($emp['employment_status'] ?? '') !== 'Inactive'): ?>
-  <form action="/hr/employee_deactivate.php" method="POST" onsubmit="return confirm('Mark this employee as Inactive?');" style="display:inline;">
-    <input type="hidden" name="id" value="<?= (int)$emp['id'] ?>">
-    <button type="submit">Deactivate This Employee?</button>
-  </form>
-<?php endif; ?>
-<p>
-    <a href="/hr/edit_employee.php?id=<?=  (int) $emp['id'] ?>">Edit</a>
-    |
-    <a href="/hr/employees.php">Back to Employees</a>
-</p>
+<script>
+  window.addEventListener('load', function () {
+    window.openEmployeeViewModal(<?= (int)$emp['id'] ?>);
+  });
+</script>

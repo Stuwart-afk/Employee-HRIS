@@ -240,6 +240,11 @@ function build_status_view_url(string $view, string $q, string $rawSort, string 
     color: #93c5fd;
   }
 
+  /* Ensure View/Edit Modals render above all page overlays */
+  .emp-modal-backdrop {
+    z-index: 10000 !important;
+  }
+
   /* Professional Company Document Modal */
   .co-sheet-backdrop {
     display: none;
@@ -656,7 +661,7 @@ function build_status_view_url(string $view, string $q, string $rawSort, string 
             $exportPayload['position_title'] = $posTitle;
             $exportJson = htmlspecialchars(json_encode($exportPayload, JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8');
             ?>
-            <tr>
+            <tr data-emp-row-id="<?= (int)$employee['id'] ?>">
               <td><strong><?= htmlspecialchars($employee['employee_id']) ?></strong></td>
               <td><?= $fullName ?></td>
               <td><?= htmlspecialchars($deptName, ENT_QUOTES, 'UTF-8') ?></td>
@@ -665,10 +670,10 @@ function build_status_view_url(string $view, string $q, string $rawSort, string 
               <td><span class="pill <?= $pillClass ?>"><?= htmlspecialchars($employee['employment_status'] ?: 'Non Active') ?></span></td>
               <td>
                 <span class="row-actions">
-                  <a href="view_employee.php?id=<?= $employee['id'] ?>">View</a>
+                  <a href="/hr/view_employee.php?id=<?= (int)$employee['id'] ?>" data-view-emp="<?= (int)$employee['id'] ?>">View</a>
                   <?php if ($isActive): ?>
                     <span class="sep">|</span>
-                    <a href="edit_employee.php?id=<?= $employee['id'] ?>">Edit</a>
+                    <a href="/hr/edit_employee.php?id=<?= (int)$employee['id'] ?>" data-edit-emp="<?= (int)$employee['id'] ?>">Edit</a>
                   <?php endif; ?>
                   <span class="sep">|</span>
                   <button type="button" class="export-action-btn btn-export-emp" data-employee="<?= $exportJson ?>">Export</button>
@@ -783,11 +788,13 @@ function build_status_view_url(string $view, string $q, string $rawSort, string 
   </div>
 </div>
 
+<?php require __DIR__ . '/../templates/hrTemplates/employee_modals.php'; ?>
+
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script>
   $(function () {
-    $('#employeeDirectoryTable').DataTable({
+    const dt = $('#employeeDirectoryTable').DataTable({
       pageLength: 10,
       lengthMenu: [10, 25, 50, 100],
       order: [],
@@ -799,6 +806,66 @@ function build_status_view_url(string $view, string $q, string $rawSort, string 
         search: 'Filter table:',
         lengthMenu: 'Show _MENU_ entries'
       }
+    });
+
+    // Sync DataTable row live after Edit Employee modal saves
+    document.addEventListener('hris:employee-updated', async function (e) {
+      const empId = e.detail && e.detail.id;
+      if (!empId) return;
+
+      try {
+        const res = await fetch(`/hr/view_employee.php?ajax=1&id=${encodeURIComponent(empId)}`, {
+          cache: 'no-store',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok || !data.employee) return;
+
+        const emp = data.employee;
+        const fullName = [emp.first_name, emp.middle_name, emp.last_name, emp.suffix]
+          .filter(v => v && String(v).trim() !== '')
+          .join(' ');
+        const deptName = emp.department_name || '—';
+        const posTitle = emp.position_title || '—';
+        const statusText = emp.employment_status || 'Non Active';
+        const isActive = statusText.trim().toLowerCase() === 'active';
+        const pillClass = isActive
+          ? 'pill-active'
+          : (emp.employment_status ? 'pill-inactive' : 'pill-neutral');
+
+        const exportPayload = Object.assign({}, emp, {
+          name: fullName,
+          department_name: deptName,
+          position_title: posTitle
+        });
+
+        const esc = v => $('<div>').text(v ?? '').html();
+        const rowNode = dt.rows().nodes().toArray().find(tr => String(tr.getAttribute('data-emp-row-id')) === String(empId));
+
+        if (rowNode) {
+          const editHtml = isActive
+            ? `<span class="sep">|</span> <a href="/hr/edit_employee.php?id=${Number(empId)}" data-edit-emp="${Number(empId)}">Edit</a>`
+            : '';
+          const actionHtml = `
+            <span class="row-actions">
+              <a href="/hr/view_employee.php?id=${Number(empId)}" data-view-emp="${Number(empId)}">View</a>
+              ${editHtml}
+              <span class="sep">|</span>
+              <button type="button" class="export-action-btn btn-export-emp" data-employee="${esc(JSON.stringify(exportPayload))}">Export</button>
+            </span>
+          `;
+
+          dt.row(rowNode).data([
+            `<strong>${esc(emp.employee_id)}</strong>`,
+            esc(fullName),
+            esc(deptName),
+            esc(posTitle),
+            esc(emp.date_hired),
+            `<span class="pill ${pillClass}">${esc(statusText)}</span>`,
+            actionHtml
+          ]).draw(false);
+        }
+      } catch (_) {}
     });
 
     const modal = document.getElementById('coEmployeeSheetModal');
