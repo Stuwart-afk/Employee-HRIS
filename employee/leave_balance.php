@@ -7,23 +7,23 @@ Require_once __DIR__ . '/../classes/Employee.php';
 
 
 
-$connect = $pdo -> prepare("SELECT * FROM leave_balance WHERE employee_id = :employee_id");
+// $connect = $pdo -> prepare("SELECT * FROM leave_balance WHERE employee_id = :employee_id");
 
 
 
 
-class test{
+// class test{
 
 
-public function testing(): array{
+// public function testing(): array{
 
 
 
     
-}
+// }
 
 
-}
+// }
 
 
 
