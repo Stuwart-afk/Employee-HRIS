@@ -6,6 +6,7 @@ date_default_timezone_set('Asia/Manila');
 require_once __DIR__ . '/../authentication/guard.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/schedule_evaluator.php';
+require_once __DIR__ . '/../includes/overtime_logic.php';
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     @session_start();
@@ -94,6 +95,9 @@ function att_normalize_record_status(?string $timeIn, int $lateMin, string $rawS
         if (strcasecmp($rawSt, 'Absent') === 0) {
             return 'Absent';
         }
+        if (strcasecmp($rawSt, 'Rest Day OT') === 0) {
+            return 'Rest Day OT';
+        }
         if (strcasecmp($rawSt, 'Late') === 0 || $lateMin > 0) {
             return 'Late';
         }
@@ -106,6 +110,44 @@ function att_normalize_record_status(?string $timeIn, int $lateMin, string $rawS
         return ucwords(strtolower($rawSt));
     }
     return 'Present';
+}
+
+function att_compute_worked_hours(string $workDate, ?string $timeIn, ?string $timeOut, ?string $breakStart, ?string $breakEnd, string $schedStart, string $schedEnd, int $approvedOtMins, string $status): string {
+    if (strcasecmp($status, 'Absent') === 0) {
+        return '0.00 hrs';
+    }
+
+    $regMins = 0;
+    if (att_has_valid_time_in($timeIn)) {
+        $inTs  = strtotime($workDate . ' ' . $timeIn);
+        $outStr = !empty($timeOut) ? $timeOut : date('H:i:s');
+        $outTs = strtotime($workDate . ' ' . $outStr);
+        if ($outTs !== false && $inTs !== false && $outTs <= $inTs) {
+            $outTs = strtotime('+1 day', $outTs);
+        }
+
+        if ($inTs !== false && $outTs !== false && $outTs > $inTs) {
+            $rawMins = (int)floor(($outTs - $inTs) / 60);
+            if (!empty($breakStart) && !empty($breakEnd)) {
+                $bS = strtotime($workDate . ' ' . $breakStart);
+                $bE = strtotime($workDate . ' ' . $breakEnd);
+                if ($bS !== false && $bE !== false && $bE > $bS) {
+                    $rawMins = max(0, $rawMins - (int)floor(($bE - $bS) / 60));
+                }
+            }
+
+            // Cap regular shift at scheduled_end; extra hours only count if HR approved OT
+            $sS = strtotime($workDate . ' ' . $schedStart);
+            $sE = strtotime($workDate . ' ' . $schedEnd);
+            if ($sS !== false && $sE !== false && $sE > $sS) {
+                $rawMins = min($rawMins, (int)floor(($sE - $sS) / 60));
+            }
+            $regMins = $rawMins;
+        }
+    }
+
+    $totalMins = $regMins + max(0, $approvedOtMins);
+    return number_format($totalMins / 60, 2) . ' hrs';
 }
 
 function att_matches_export_status(array $row, string $exportStatus): bool {
@@ -181,6 +223,24 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
     $deptExpr   = $deptMeta['dept_expr'];
     $deptIdExpr = $deptMeta['dept_id_expr'];
 
+    // Approved overtime lookup per employee & date
+    $approvedOtMap = [];
+    if (att_has_table($pdo, 'overtime_requests')) {
+        try {
+            $otStmt = $pdo->prepare("
+                SELECT `employee_id`, `work_date`, COALESCE(SUM(`approved_minutes`), 0) AS app_mins
+                FROM `overtime_requests`
+                WHERE `work_date` BETWEEN :s_d AND :e_d
+                  AND `status` = 'Approved'
+                GROUP BY `employee_id`, `work_date`
+            ");
+            $otStmt->execute([':s_d' => $startDate, ':e_d' => $endDate]);
+            foreach ($otStmt->fetchAll(PDO::FETCH_ASSOC) as $otr) {
+                $approvedOtMap[(string)$otr['work_date'] . '|' . (int)$otr['employee_id']] = max(0, (int)$otr['app_mins']);
+            }
+        } catch (Throwable $e) {}
+    }
+
     $recordsMap = [];
 
     if (att_has_table($pdo, 'attendance_records')) {
@@ -193,7 +253,8 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
         try {
             $stmt = $pdo->prepare("
                 SELECT ar.`work_date`, ar.`employee_id`, ar.`time_in`, ar.`time_out`,
-                       ar.`break_start`, ar.`break_end`, ar.`late_minutes`, ar.`overtime_minutes`,
+                       ar.`break_start`, ar.`break_end`, ar.`scheduled_start`, ar.`scheduled_end`,
+                       ar.`late_minutes`, ar.`overtime_minutes`,
                        ar.`status`, {$notesExpr} AS notes,
                        {$nameExpr} AS emp_name, {$codeExpr} AS employee_code,
                        {$deptIdExpr} AS department_id, {$deptExpr} AS department_name
@@ -205,24 +266,34 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $d = (string)$r['work_date'];
                 $eid = (int)$r['employee_id'];
+                $key = $d . '|' . $eid;
                 $timeIn = $r['time_in'] ?: null;
                 $lateMin = max(0, (int)($r['late_minutes'] ?? 0));
                 $rawSt = trim((string)($r['status'] ?? ''));
                 $normStatus = att_normalize_record_status($timeIn, $lateMin, $rawSt, !empty($onLeaveByDate[$d][$eid]));
 
-                $recordsMap[$d . '|' . $eid] = [
+                // Only approved overtime counts toward credited overtime_minutes
+                $otMin = isset($approvedOtMap[$key]) ? $approvedOtMap[$key] : max(0, (int)($r['overtime_minutes'] ?? 0));
+                $sStart = (string)($r['scheduled_start'] ?: '08:00:00');
+                $sEnd   = (string)($r['scheduled_end'] ?: '17:00:00');
+
+                $recordsMap[$key] = [
                     'work_date'        => $d,
                     'employee_id'      => $eid,
                     'emp_name'         => (string)$r['emp_name'],
                     'employee_code'    => (string)$r['employee_code'],
                     'department_id'    => (int)($r['department_id'] ?? 0),
                     'department_name'  => (string)($r['department_name'] ?? 'Unassigned'),
+                    'scheduled_start'  => $sStart,
+                    'scheduled_end'    => $sEnd,
+                    'shift_label'      => substr($sStart, 0, 5) . ' - ' . substr($sEnd, 0, 5),
                     'time_in'          => $timeIn,
                     'time_out'         => $r['time_out'] ?: null,
                     'break_start'      => $r['break_start'] ?: null,
                     'break_end'        => $r['break_end'] ?: null,
                     'late_minutes'     => $lateMin,
-                    'overtime_minutes' => max(0, (int)($r['overtime_minutes'] ?? 0)),
+                    'overtime_minutes' => $otMin,
+                    'worked_hours'     => att_compute_worked_hours($d, $timeIn, $r['time_out'] ?: null, $r['break_start'] ?: null, $r['break_end'] ?: null, $sStart, $sEnd, $otMin, $normStatus),
                     'status'           => $normStatus,
                     'notes'            => (string)($r['notes'] ?? ''),
                 ];
@@ -238,7 +309,6 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
         $hasBreakIn  = att_has_col($pdo, 'attendance', 'break_start') || att_has_col($pdo, 'attendance', 'break_in');
         $hasBreakOut = att_has_col($pdo, 'attendance', 'break_end') || att_has_col($pdo, 'attendance', 'break_out');
         $hasLate     = att_has_col($pdo, 'attendance', 'late_minutes');
-        $hasOt       = att_has_col($pdo, 'attendance', 'overtime_minutes');
 
         $dateExpr = $hasWorkDate
             ? "COALESCE(DATE(a.`work_date`), " . ($hasTimeIn ? "DATE(a.`time_in`)" : "CURRENT_DATE()") . ")"
@@ -251,7 +321,6 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
         $bOutExpr = ($hasBreakOut && $bOutCol !== '') ? "TIME(a.`{$bOutCol}`)" : "NULL";
         $stExpr   = $hasStatus ? "COALESCE(NULLIF(a.`status`, ''), '')" : "''";
         $lateExpr = $hasLate ? "COALESCE(a.`late_minutes`, 0)" : "0";
-        $otExpr   = $hasOt ? "COALESCE(a.`overtime_minutes`, 0)" : "0";
 
         $joinEmp = $hasEmp ? "LEFT JOIN `employees` e ON e.`id` = a.`employee_id` {$joinDept}" : "";
         $nameExpr = $hasEmp
@@ -263,7 +332,7 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
                 SELECT {$dateExpr} AS work_date, a.`employee_id`,
                        {$inExpr} AS time_in, {$outExpr} AS time_out,
                        {$bInExpr} AS break_start, {$bOutExpr} AS break_end,
-                       {$lateExpr} AS late_minutes, {$otExpr} AS overtime_minutes,
+                       {$lateExpr} AS late_minutes,
                        {$stExpr} AS status,
                        {$nameExpr} AS emp_name, {$codeExpr} AS employee_code,
                        {$deptIdExpr} AS department_id, {$deptExpr} AS department_name
@@ -281,6 +350,8 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
                 $lateMin = max(0, (int)($r['late_minutes'] ?? 0));
                 $rawSt = trim((string)($r['status'] ?? ''));
                 $normStatus = att_normalize_record_status($timeIn, $lateMin, $rawSt, !empty($onLeaveByDate[$d][$eid]));
+                $shift = ot_get_employee_shift($pdo, $eid, $d);
+                $otMin = $approvedOtMap[$key] ?? 0;
 
                 if (!isset($recordsMap[$key])) {
                     $recordsMap[$key] = [
@@ -290,12 +361,16 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
                         'employee_code'    => (string)$r['employee_code'],
                         'department_id'    => (int)($r['department_id'] ?? 0),
                         'department_name'  => (string)($r['department_name'] ?? 'Unassigned'),
+                        'scheduled_start'  => $shift['shift_start'],
+                        'scheduled_end'    => $shift['shift_end'],
+                        'shift_label'      => substr($shift['shift_start'], 0, 5) . ' - ' . substr($shift['shift_end'], 0, 5),
                         'time_in'          => $timeIn,
                         'time_out'         => $r['time_out'] ?: null,
                         'break_start'      => $r['break_start'] ?: null,
                         'break_end'        => $r['break_end'] ?: null,
                         'late_minutes'     => $lateMin,
-                        'overtime_minutes' => max(0, (int)($r['overtime_minutes'] ?? 0)),
+                        'overtime_minutes' => $otMin,
+                        'worked_hours'     => att_compute_worked_hours($d, $timeIn, $r['time_out'] ?: null, $r['break_start'] ?: null, $r['break_end'] ?: null, $shift['shift_start'], $shift['shift_end'], $otMin, $normStatus),
                         'status'           => $normStatus,
                         'notes'            => '',
                     ];
@@ -313,6 +388,17 @@ function att_fetch_unified_records(PDO $pdo, string $startDate, string $endDate,
                     if (empty($recordsMap[$key]['break_end']) && !empty($r['break_end'])) {
                         $recordsMap[$key]['break_end'] = $r['break_end'];
                     }
+                    $recordsMap[$key]['worked_hours'] = att_compute_worked_hours(
+                        $d,
+                        $recordsMap[$key]['time_in'],
+                        $recordsMap[$key]['time_out'],
+                        $recordsMap[$key]['break_start'],
+                        $recordsMap[$key]['break_end'],
+                        $recordsMap[$key]['scheduled_start'],
+                        $recordsMap[$key]['scheduled_end'],
+                        $recordsMap[$key]['overtime_minutes'],
+                        $recordsMap[$key]['status']
+                    );
                 }
             }
         } catch (Throwable $e) {}
@@ -514,8 +600,10 @@ $searchQ     = trim((string)($_GET['q'] ?? ''));
 try {
     att_ensure_tables($pdo);
     sched_sync_realtime_attendance($pdo, $today);
+    ot_apply_auto_timeout($pdo, $today);
     if ($filterDate !== $today) {
         sched_sync_realtime_attendance($pdo, $filterDate);
+        ot_apply_auto_timeout($pdo, $filterDate);
     }
 } catch (Throwable $e) {
     $flashErr = 'Unable to initialize attendance tables: ' . $e->getMessage();
@@ -543,7 +631,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $flashErr === '') {
                 throw new RuntimeException('Please select an employee.');
             }
 
-            $activeSched = sched_get_for_employee_date($pdo, $empId, $workDate);
+            $activeSched = ot_get_employee_shift($pdo, $empId, $workDate);
 
             $ins = $pdo->prepare("
                 INSERT IGNORE INTO `attendance_records` (`employee_id`, `work_date`, `scheduled_start`, `scheduled_end`, `status`)
@@ -581,6 +669,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $flashErr === '') {
 
             $eval = sched_evaluate_punch($pdo, $empId, $workDate, $timeIn, $timeOut, $status);
 
+            // Only HR-approved overtime requests count toward overtime_minutes
+            $approvedOtMins = ot_sync_approved_to_attendance($pdo, $empId, $workDate);
+
             $upd = $pdo->prepare("
                 UPDATE `attendance_records`
                 SET `time_in` = ?, `time_out` = ?, `break_start` = ?, `break_end` = ?,
@@ -590,8 +681,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $flashErr === '') {
             ");
             $upd->execute([
                 $timeIn, $timeOut, $breakStart, $breakEnd,
-                $eval['scheduled_start'], $eval['scheduled_end'],
-                $eval['late_minutes'], $eval['overtime_minutes'], $eval['status'],
+                $activeSched['shift_start'], $activeSched['shift_end'],
+                $eval['late_minutes'], $approvedOtMins, $eval['status'],
                 $empId, $workDate
             ]);
 
@@ -642,7 +733,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $flashErr === '') {
             header('Content-Disposition: attachment; filename="attendance_' . $fileTag . '_' . $fromDate . '_to_' . $toDate . '.csv"');
 
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['Date', 'Employee Code', 'Employee Name', 'Department', 'Time In', 'Time Out', 'Break Start', 'Break End', 'Late (mins)', 'Overtime (mins)', 'Status']);
+            fputcsv($out, ['Date', 'Employee Code', 'Employee Name', 'Department', 'Scheduled Shift', 'Time In', 'Time Out', 'Break Start', 'Break End', 'Late (mins)', 'Approved OT (mins)', 'Total Worked Hours', 'Status']);
 
             foreach ($exportRows as $row) {
                 fputcsv($out, [
@@ -650,12 +741,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $flashErr === '') {
                     $row['employee_code'],
                     $row['emp_name'],
                     $row['department_name'] ?? 'Unassigned',
+                    $row['shift_label'] ?? '08:00 - 17:00',
                     $row['time_in'],
                     $row['time_out'],
                     $row['break_start'],
                     $row['break_end'],
                     $row['late_minutes'],
                     $row['overtime_minutes'],
+                    $row['worked_hours'] ?? '0.00 hrs',
                     $row['status']
                 ]);
             }
@@ -737,8 +830,10 @@ if ($searchQ !== '') {
 if (isset($_GET['ajax']) && $_GET['ajax'] === 'live_state') {
     try {
         sched_sync_realtime_attendance($pdo, $today);
+        ot_apply_auto_timeout($pdo, $today);
         if ($filterDate !== $today) {
             sched_sync_realtime_attendance($pdo, $filterDate);
+            ot_apply_auto_timeout($pdo, $filterDate);
         }
         $analytics = att_build_analytics($pdo, $filterDate, $filterMonth, count($employees));
         $ov = $analytics['overview'];
@@ -813,7 +908,7 @@ if (is_file($hrHeader)) {
   .att-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
   .att-input, .att-select {
     width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #334155;
-    background: #0f172a; color: #f8fafc; font-size: 13px;
+    background: #0f172a; color: #f8fafc; font-size: 13px; box-sizing: border-box;
   }
   .att-btn {
     padding: 8px 14px; border-radius: 8px; border: none; background: #2563eb;
@@ -905,7 +1000,7 @@ if (is_file($hrHeader)) {
         <?php if ($pageView === 'records'): ?>
           Daily Attendance Trend, Daily Chart Board, Leave Calendar &amp; Attendance Logs &amp; History
         <?php else: ?>
-          Today Only (<?= htmlspecialchars($today, ENT_QUOTES, 'UTF-8') ?>) — Real-time Employee Overview, Daily Trend, Daily Chart Board &amp; Daily Logs DataTable
+          Today Only (<?= htmlspecialchars($today, ENT_QUOTES, 'UTF-8') ?>) — Auto Time-Out at Scheduled Shift End + Approved Overtime Sync
         <?php endif; ?>
       </p>
     </div>
@@ -946,9 +1041,9 @@ if (is_file($hrHeader)) {
         <div class="att-kpi-sub">Approved leave</div>
       </div>
       <div class="att-kpi">
-        <div class="att-kpi-lbl">Overtime</div>
+        <div class="att-kpi-lbl">Approved Overtime</div>
         <div class="att-kpi-val" id="kpiOvertime"><?= (int)$ov['overtime'] ?></div>
-        <div class="att-kpi-sub">Worked extra hours</div>
+        <div class="att-kpi-sub">HR-approved OT shifts</div>
       </div>
       <div class="att-kpi">
         <div class="att-kpi-lbl">Pending Corrections</div>
@@ -997,11 +1092,15 @@ if (is_file($hrHeader)) {
         <div class="att-form-row">
           <div>
             <label class="att-kpi-lbl">Employee</label>
-            <select name="employee_id" class="att-select" required>
+            <select name="employee_id" id="attPunchEmployeeSelect" class="att-select" required>
               <option value="">Select employee...</option>
               <?php foreach ($employees as $emp): ?>
-                <option value="<?= (int)$emp['id'] ?>">
-                  <?= htmlspecialchars(($emp['employee_code'] ? $emp['employee_code'] . ' — ' : '') . ($emp['full_name'] ?: 'Employee #' . $emp['id']), ENT_QUOTES, 'UTF-8') ?>
+                <?php
+                  $empLabel = ($emp['employee_code'] ? $emp['employee_code'] . ' — ' : '') . ($emp['full_name'] ?: 'Employee #' . $emp['id']);
+                  $deptLabel = (string)($emp['department_name'] ?? 'Unassigned');
+                ?>
+                <option value="<?= (int)$emp['id'] ?>" data-department="<?= htmlspecialchars($deptLabel, ENT_QUOTES, 'UTF-8') ?>">
+                  <?= htmlspecialchars($empLabel, ENT_QUOTES, 'UTF-8') ?>
                 </option>
               <?php endforeach; ?>
             </select>
@@ -1042,11 +1141,12 @@ if (is_file($hrHeader)) {
               <th>Date</th>
               <th>Employee</th>
               <th>Department</th>
+              <th>Schedule</th>
               <th>Time In</th>
               <th>Time Out</th>
-              <th>Break</th>
               <th>Late</th>
-              <th>Overtime</th>
+              <th>Approved OT</th>
+              <th>Worked Hours</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -1073,11 +1173,17 @@ if (is_file($hrHeader)) {
                   <?php endif; ?>
                 </td>
                 <td><?= htmlspecialchars((string)($r['department_name'] ?? 'Unassigned'), ENT_QUOTES, 'UTF-8') ?></td>
+                <td><?= htmlspecialchars((string)($r['shift_label'] ?? '08:00 - 17:00'), ENT_QUOTES, 'UTF-8') ?></td>
                 <td><?= htmlspecialchars((string)($r['time_in'] ?: '—'), ENT_QUOTES, 'UTF-8') ?></td>
-                <td><?= htmlspecialchars((string)($r['time_out'] ?: '—'), ENT_QUOTES, 'UTF-8') ?></td>
-                <td><?= htmlspecialchars(($r['break_start'] ?: '—') . ' - ' . ($r['break_end'] ?: '—'), ENT_QUOTES, 'UTF-8') ?></td>
+                <td>
+                  <?= htmlspecialchars((string)($r['time_out'] ?: '—'), ENT_QUOTES, 'UTF-8') ?>
+                  <?php if (stripos((string)($r['notes'] ?? ''), 'Auto timed out') !== false): ?>
+                    <div style="font-size:10.5px;color:#93c5fd;">Auto-Out</div>
+                  <?php endif; ?>
+                </td>
                 <td><?= (int)($r['late_minutes'] ?? 0) ?>m</td>
                 <td><?= (int)($r['overtime_minutes'] ?? 0) ?>m</td>
+                <td><strong><?= htmlspecialchars((string)($r['worked_hours'] ?? '0.00 hrs'), ENT_QUOTES, 'UTF-8') ?></strong></td>
                 <td><span class="att-badge <?= $badgeClass ?>"><?= htmlspecialchars($st, ENT_QUOTES, 'UTF-8') ?></span></td>
               </tr>
             <?php endforeach; ?>
@@ -1222,11 +1328,12 @@ if (is_file($hrHeader)) {
               <th>Date</th>
               <th>Employee</th>
               <th>Department</th>
+              <th>Schedule</th>
               <th>Time In</th>
               <th>Time Out</th>
-              <th>Break</th>
               <th>Late</th>
-              <th>Overtime</th>
+              <th>Approved OT</th>
+              <th>Worked Hours</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -1253,11 +1360,17 @@ if (is_file($hrHeader)) {
                   <?php endif; ?>
                 </td>
                 <td><?= htmlspecialchars((string)($r['department_name'] ?? 'Unassigned'), ENT_QUOTES, 'UTF-8') ?></td>
+                <td><?= htmlspecialchars((string)($r['shift_label'] ?? '08:00 - 17:00'), ENT_QUOTES, 'UTF-8') ?></td>
                 <td><?= htmlspecialchars((string)($r['time_in'] ?: '—'), ENT_QUOTES, 'UTF-8') ?></td>
-                <td><?= htmlspecialchars((string)($r['time_out'] ?: '—'), ENT_QUOTES, 'UTF-8') ?></td>
-                <td><?= htmlspecialchars(($r['break_start'] ?: '—') . ' - ' . ($r['break_end'] ?: '—'), ENT_QUOTES, 'UTF-8') ?></td>
+                <td>
+                  <?= htmlspecialchars((string)($r['time_out'] ?: '—'), ENT_QUOTES, 'UTF-8') ?>
+                  <?php if (stripos((string)($r['notes'] ?? ''), 'Auto timed out') !== false): ?>
+                    <div style="font-size:10.5px;color:#93c5fd;">Auto-Out</div>
+                  <?php endif; ?>
+                </td>
                 <td><?= (int)($r['late_minutes'] ?? 0) ?>m</td>
                 <td><?= (int)($r['overtime_minutes'] ?? 0) ?>m</td>
+                <td><strong><?= htmlspecialchars((string)($r['worked_hours'] ?? '0.00 hrs'), ENT_QUOTES, 'UTF-8') ?></strong></td>
                 <td><span class="att-badge <?= $badgeClass ?>"><?= htmlspecialchars($st, ENT_QUOTES, 'UTF-8') ?></span></td>
               </tr>
             <?php endforeach; ?>
@@ -1434,6 +1547,143 @@ if (is_file($hrHeader)) {
     }
   }
 
+  const punchSelect = document.getElementById('attPunchEmployeeSelect');
+  if (punchSelect) {
+    punchSelect.style.position = 'absolute';
+    punchSelect.style.opacity = '0';
+    punchSelect.style.pointerEvents = 'none';
+    punchSelect.style.height = '0';
+    punchSelect.style.width = '0';
+    punchSelect.tabIndex = -1;
+
+    const punchWrap = document.createElement('div');
+    punchWrap.className = 'att-combo-wrap';
+    punchWrap.style.display = 'block';
+    punchWrap.style.width = '100%';
+    punchWrap.style.minWidth = '0';
+
+    const punchInput = document.createElement('input');
+    punchInput.type = 'text';
+    punchInput.className = 'att-input';
+    punchInput.placeholder = 'Type employee name or department...';
+    punchInput.autocomplete = 'off';
+
+    const punchMenu = document.createElement('div');
+    punchMenu.className = 'att-combo-menu';
+    punchMenu.setAttribute('role', 'listbox');
+
+    punchSelect.parentNode.insertBefore(punchWrap, punchSelect);
+    punchWrap.appendChild(punchInput);
+    punchWrap.appendChild(punchMenu);
+
+    const punchOptions = Array.from(punchSelect.options)
+      .filter(opt => opt.value !== '')
+      .map(opt => ({
+        id: opt.value,
+        label: opt.textContent.trim(),
+        dept: (opt.getAttribute('data-department') || 'Unassigned').trim()
+      }));
+
+    let punchMatches = [];
+    let punchActiveIdx = -1;
+
+    function renderPunchOptions(query) {
+      const q = String(query || '').trim().toLowerCase();
+      punchMatches = (q === ''
+        ? punchOptions
+        : punchOptions.filter(item =>
+            item.label.toLowerCase().includes(q) ||
+            item.dept.toLowerCase().includes(q)
+          )
+      ).slice(0, 50);
+
+      punchActiveIdx = punchMatches.length > 0 ? 0 : -1;
+
+      if (!punchMatches.length) {
+        punchMenu.innerHTML = '<div class="att-combo-empty">No matching employee or department.</div>';
+        punchMenu.classList.add('is-open');
+        return;
+      }
+
+      punchMenu.innerHTML = punchMatches.map((item, idx) => `
+        <button type="button" class="att-combo-opt${idx === 0 ? ' is-active' : ''}" data-pidx="${idx}">
+          <span>${escHtml(item.label)}</span>
+          <span class="att-combo-sub">${escHtml(item.dept)}</span>
+        </button>
+      `).join('');
+
+      punchMenu.classList.add('is-open');
+    }
+
+    function pickPunchEmployee(item) {
+      if (!item) return;
+      punchSelect.value = item.id;
+      punchInput.value = `${item.label} (${item.dept})`;
+      punchMenu.classList.remove('is-open');
+    }
+
+    punchInput.addEventListener('focus', () => renderPunchOptions(punchSelect.value ? '' : punchInput.value));
+    punchInput.addEventListener('input', () => {
+      punchSelect.value = '';
+      renderPunchOptions(punchInput.value);
+    });
+
+    punchInput.addEventListener('keydown', (e) => {
+      if (!punchMenu.classList.contains('is-open') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        renderPunchOptions(punchInput.value);
+        return;
+      }
+      if (!punchMatches.length) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        punchActiveIdx = (punchActiveIdx + 1) % punchMatches.length;
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        punchActiveIdx = (punchActiveIdx - 1 + punchMatches.length) % punchMatches.length;
+      } else if (e.key === 'Enter' && punchMenu.classList.contains('is-open')) {
+        e.preventDefault();
+        pickPunchEmployee(punchMatches[punchActiveIdx] || punchMatches[0]);
+        return;
+      } else if (e.key === 'Escape') {
+        punchMenu.classList.remove('is-open');
+        return;
+      } else {
+        return;
+      }
+
+      punchMenu.querySelectorAll('.att-combo-opt').forEach((btn, idx) => {
+        btn.classList.toggle('is-active', idx === punchActiveIdx);
+        if (idx === punchActiveIdx) btn.scrollIntoView({ block: 'nearest' });
+      });
+    });
+
+    punchMenu.addEventListener('mousedown', (e) => {
+      const btn = e.target.closest('.att-combo-opt');
+      if (!btn) return;
+      e.preventDefault();
+      const idx = Number(btn.getAttribute('data-pidx'));
+      pickPunchEmployee(punchMatches[idx]);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!punchWrap.contains(e.target)) {
+        punchMenu.classList.remove('is-open');
+      }
+    });
+
+    const punchForm = punchSelect.closest('form');
+    if (punchForm) {
+      punchForm.addEventListener('submit', (e) => {
+        if (!punchSelect.value) {
+          e.preventDefault();
+          renderPunchOptions(punchInput.value);
+          punchInput.focus();
+        }
+      });
+    }
+  }
+
   function formatLogRowCells(r) {
     const hasIn = hasValidTimeIn(r.time_in);
     let st = String(r.status || 'Pending');
@@ -1446,16 +1696,19 @@ if (is_file($hrHeader)) {
     const empHtml = r.employee_code
       ? `<strong>${escHtml(r.emp_name)}</strong><div style="font-size:11.5px;color:#94a3b8;">${escHtml(r.employee_code)}</div>`
       : `<strong>${escHtml(r.emp_name)}</strong>`;
+    const isAutoOut = String(r.notes || '').toLowerCase().includes('auto timed out');
+    const outHtml = `${escHtml(r.time_out || '—')}${isAutoOut ? '<div style="font-size:10.5px;color:#93c5fd;">Auto-Out</div>' : ''}`;
 
     return [
       escHtml(r.work_date),
       empHtml,
       escHtml(r.department_name || 'Unassigned'),
+      escHtml(r.shift_label || '08:00 - 17:00'),
       escHtml(r.time_in || '—'),
-      escHtml(r.time_out || '—'),
-      escHtml((r.break_start || '—') + ' - ' + (r.break_end || '—')),
+      outHtml,
       `${Number(r.late_minutes || 0)}m`,
       `${Number(r.overtime_minutes || 0)}m`,
+      `<strong>${escHtml(r.worked_hours || '0.00 hrs')}</strong>`,
       `<span class="att-badge ${cls}">${escHtml(st)}</span>`
     ];
   }
@@ -1739,7 +1992,7 @@ if (is_file($hrHeader)) {
             try {
               const pkt = JSON.parse(ev.data);
               const t = (pkt && pkt.event && pkt.event.type) || '';
-              if (t.startsWith('attendance.') || t.startsWith('leave.')) {
+              if (t.startsWith('attendance.') || t.startsWith('leave.') || t.startsWith('overtime.')) {
                 pollLiveAttendance();
               }
             } catch (_) {}
