@@ -129,6 +129,7 @@ CREATE TABLE
         department_id BIGINT DEFAULT NULL,
         position_id BIGINT DEFAULT NULL,
         `rank` VARCHAR(30) NOT NULL DEFAULT 'employee',
+        manager_id BIGINT DEFAULT NULL,
         date_hired DATE NOT NULL,
         employment_type VARCHAR(50) NOT NULL DEFAULT 'Full-time',
         employment_status VARCHAR(30) NOT NULL DEFAULT 'Active',
@@ -139,10 +140,12 @@ CREATE TABLE
         KEY idx_employees_department (department_id),
         KEY idx_employees_position (position_id),
         KEY idx_employees_rank (`rank`),
+        KEY idx_employees_manager (manager_id),
         KEY idx_employees_status (employment_status),
         KEY idx_employees_last_name (last_name),
         CONSTRAINT fk_employee_department FOREIGN KEY (department_id) REFERENCES departments (id) ON DELETE SET NULL ON UPDATE CASCADE,
         CONSTRAINT fk_employee_position FOREIGN KEY (position_id) REFERENCES positions (id) ON DELETE SET NULL ON UPDATE CASCADE,
+        CONSTRAINT fk_employee_manager FOREIGN KEY (manager_id) REFERENCES employees (id) ON DELETE SET NULL ON UPDATE CASCADE,
         CONSTRAINT employee_status_check CHECK (
             employment_status IN ('Active', 'Inactive', 'On Leave', 'Suspended')
         )
@@ -201,7 +204,7 @@ CREATE TABLE
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE
-    holidays (
+    IF NOT EXISTS holidays (
         id INT AUTO_INCREMENT PRIMARY KEY,
         holiday_name VARCHAR(150) NOT NULL,
         holiday_date DATE NOT NULL,
@@ -219,8 +222,6 @@ CREATE TABLE
         INDEX idx_holiday_date (holiday_date),
         INDEX idx_holiday_status (status)
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
-
-;
 
 CREATE TABLE
     IF NOT EXISTS promotion_logs (
@@ -291,7 +292,6 @@ CREATE TABLE
 -- ============================================================
 -- 5. ATTENDANCE (after employees so FK works)
 -- ============================================================
-<<<<<<< HEAD
 CREATE TABLE
     IF NOT EXISTS attendance (
         id BIGINT NOT NULL AUTO_INCREMENT,
@@ -299,31 +299,49 @@ CREATE TABLE
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         email VARCHAR(255) DEFAULT NULL,
         time_in DATETIME DEFAULT NULL,
-        time_out DATET    Break_Time  DATETIME      DEFAULT NULL,
-    PRIMARY KEY (id),
-    KEY idx_attendance_email_time_in (email, time_in),  DATETIME      DEFAULT NULL,
-    workhours   DECIMAL(10,2) DEFAULT NULL,
-    Break_Time  DATETIME      DEFAULT NULL,
-    -- Shift lifecycle + overtime (see classes/AttendanceService.php)
-    shift_date             DATE          DEFAULT NULL,
-    status                 VARCHAR(20)   DEFAULT NULL,  -- OPEN | COMPLETED | MISSING_OUT
-    regular_hours          DECIMAL(10,2) DEFAULT NULL,
-    overtime_minutes       INT           DEFAULT NULL,
-    overtime_hours         DECIMAL(10,2) DEFAULT NULL,
-    overtime_status        VARCHAR(20)   DEFAULT NULL,  -- NONE | PENDING_APPROVAL | APPROVED | REJECTED
-    overtime_reviewed_by   BIGINT        DEFAULT NULL,
-    overtime_reviewed_at   DATETIME      DEFAULT NULL,
-    missing_out_flagged_at DATETIME      DEFAULT NULL,
-    PRIMARY KEY (id),
-    KEY idx_attendance_email_time_in (email, time_in),
-    KEY idx_attendance_employee      (employee_id),
-    CONSTRAINT fk_attendance_employee
-        FOREIGN KEY (employee_id) REFERENCES employees (id)
-        ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
->>>>>>> adabb9c (Employee done i think)
+        time_out DATETIME DEFAULT NULL,
+        workhours DECIMAL(10, 2) DEFAULT NULL,
+        Break_Time DATETIME DEFAULT NULL,
+        -- Shift lifecycle + overtime (see classes/AttendanceService.php)
+        shift_date DATE DEFAULT NULL,
+        status VARCHAR(20) DEFAULT NULL, -- OPEN | COMPLETED | MISSING_OUT
+        regular_hours DECIMAL(10, 2) DEFAULT NULL,
+        overtime_minutes INT DEFAULT NULL,
+        overtime_hours DECIMAL(10, 2) DEFAULT NULL,
+        overtime_status VARCHAR(20) DEFAULT NULL, -- NONE | PENDING_APPROVAL | APPROVED | REJECTED
+        overtime_reviewed_by BIGINT DEFAULT NULL,
+        overtime_reviewed_at DATETIME DEFAULT NULL,
+        missing_out_flagged_at DATETIME DEFAULT NULL,
+        PRIMARY KEY (id),
+        KEY idx_attendance_email_time_in (email, time_in),
+        KEY idx_attendance_employee (employee_id),
+        CONSTRAINT fk_attendance_employee FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE SET NULL ON UPDATE CASCADE
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- employee_id backfilled from email via subquery (MySQL 8 compatible)
+-- ============================================================
+-- 5B. OVERTIME REQUESTS
+-- ============================================================
+CREATE TABLE
+    IF NOT EXISTS overtime_requests (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        employee_id BIGINT NOT NULL,
+        work_date DATE NOT NULL,
+        start_time TIME NOT NULL,
+        end_time TIME NOT NULL,
+        requested_minutes INT NOT NULL DEFAULT 0,
+        approved_minutes INT NOT NULL DEFAULT 0,
+        ot_type VARCHAR(40) NOT NULL DEFAULT 'Regular Day',
+        reason TEXT NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'Pending',
+        reviewed_by VARCHAR(120) DEFAULT NULL,
+        reviewed_at DATETIME DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_ot_emp_date (employee_id, work_date),
+        KEY idx_ot_status (status),
+        CONSTRAINT fk_ot_employee FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 -- ============================================================
 -- 6. LEAVE (legacy simple balance)
 -- ============================================================
@@ -429,7 +447,10 @@ VALUES
         'Active',
         '2026-10-22 21:50:27',
         '2026-10-22 21:50:27'
-    );
+    ) ON DUPLICATE KEY
+UPDATE leave_name =
+VALUES
+    (leave_name);
 
 -- ============================================================
 -- 8. LEAVE BALANCES
@@ -465,7 +486,7 @@ CREATE TABLE
         number_of_days DECIMAL(6, 2) NOT NULL,
         reason TEXT DEFAULT NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'Pending',
-        approved_by BIGINT DEFAULT NULL, -- fixed: was INT
+        approved_by BIGINT DEFAULT NULL,
         approved_at DATETIME DEFAULT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
@@ -506,10 +527,8 @@ CREATE TABLE
         KEY idx_leave_request_logs_request (leave_request_id)
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- Only insert logs that reference existing employees (6 and 7)
--- Historical logs for employees 1,2,3 are excluded (orphaned)
 -- ============================================================
--- 11. DEDUCTION RATES
+-- 11. BACKUP SETTINGS & DEDUCTION RATES
 -- ============================================================
 CREATE TABLE
     IF NOT EXISTS backup_settings (
@@ -526,7 +545,7 @@ CREATE TABLE
         CONSTRAINT chk_backup_minute CHECK (backup_minute IN (0, 15, 30, 45)),
         CONSTRAINT chk_backup_day CHECK (backup_day BETWEEN 1 AND 7),
         CONSTRAINT chk_backup_retention CHECK (retention_days IN (7, 14, 30, 60, 90))
-    );
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 INSERT INTO
     backup_settings (
@@ -552,9 +571,6 @@ VALUES
     ) ON DUPLICATE KEY
 UPDATE id = id;
 
---     INSERT INTO backup_settings (id)
--- VALUES (1)
--- ON DUPLICATE KEY UPDATE id = id;
 CREATE TABLE
     IF NOT EXISTS deduction_rates (
         id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -660,11 +676,86 @@ CREATE TABLE
         CONSTRAINT fk_payslip_employee FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
+-- ============================================================
+-- 15. BENEFITS & SEPARATION / RETIREMENT SETTLEMENTS
+-- ============================================================
+CREATE TABLE
+    IF NOT EXISTS benefit_plans (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        name VARCHAR(120) NOT NULL,
+        category VARCHAR(40) NOT NULL DEFAULT 'Allowance',
+        default_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        is_taxable TINYINT (1) NOT NULL DEFAULT 0,
+        min_tenure_months INT NOT NULL DEFAULT 0,
+        is_active TINYINT (1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uniq_benefit_plan_name (name)
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO benefit_plans (
+    name,
+    category,
+    default_amount,
+    is_taxable,
+    min_tenure_months,
+    is_active
+)
+VALUES
+    ('Rice Subsidy (De Minimis)', 'Allowance', 2000.00, 0, 0, 1),
+    ('Transportation Allowance', 'Allowance', 1500.00, 0, 0, 1),
+    ('Meal Allowance', 'Allowance', 1500.00, 0, 0, 1),
+    ('HMO Medical Coverage', 'Health', 2500.00, 0, 6, 1),
+    ('Senior / Loyalty Gratuity Top-Up', 'Retirement', 5000.00, 0, 60, 1);
+
+CREATE TABLE
+    IF NOT EXISTS employee_benefits (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        employee_id BIGINT NOT NULL,
+        benefit_plan_id BIGINT UNSIGNED NOT NULL,
+        custom_amount DECIMAL(12, 2) DEFAULT NULL,
+        effective_date DATE NOT NULL,
+        end_date DATE DEFAULT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'Active',
+        notes VARCHAR(255) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_emp_ben_emp (employee_id),
+        KEY idx_emp_ben_plan (benefit_plan_id),
+        CONSTRAINT fk_emp_ben_employee FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE ON UPDATE CASCADE,
+        CONSTRAINT fk_emp_ben_plan FOREIGN KEY (benefit_plan_id) REFERENCES benefit_plans (id) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+CREATE TABLE
+    IF NOT EXISTS separation_settlements (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        employee_id BIGINT NOT NULL,
+        separation_type VARCHAR(40) NOT NULL DEFAULT 'Resignation',
+        hire_date DATE NOT NULL,
+        last_working_day DATE NOT NULL,
+        years_of_service DECIMAL(6, 2) NOT NULL DEFAULT 0.00,
+        unpaid_salary DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        prorated_13th_month DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        leave_conversion_pay DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        retirement_gratuity_pay DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        tax_refund_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        deductions_or_accountability DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        net_final_pay DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+        notes TEXT DEFAULT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'Pending_Clearance',
+        reviewed_by VARCHAR(120) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_sep_emp (employee_id),
+        KEY idx_sep_status (status),
+        CONSTRAINT fk_sep_employee FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 -- =========================================
--- 1. ROLES
+-- 16. ROLES & RBAC
 -- =========================================
 CREATE TABLE
-    roles (
+    IF NOT EXISTS roles (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         role_key VARCHAR(30) NOT NULL UNIQUE,
         role_name VARCHAR(100) NOT NULL,
@@ -679,11 +770,8 @@ INSERT IGNORE INTO roles (role_key, role_name, is_protected) VALUES
     ('hr',       'HR Staff',      1),
     ('employee', 'Employee',      0);
 
--- =========================================
--- 2. MODULES
--- =========================================
 CREATE TABLE
-    modules (
+    IF NOT EXISTS modules (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         module_key VARCHAR(50) NOT NULL UNIQUE,
         module_name VARCHAR(100) NOT NULL,
@@ -710,11 +798,8 @@ INSERT IGNORE INTO modules (module_key, module_name, is_active, sort_order) VALU
     ('system_settings',      'System Settings',      1, 13),
     ('backup_management',    'Backup Management',    1, 14);
 
--- =========================================
--- 3. PERMISSIONS
--- =========================================
 CREATE TABLE
-    permissions (
+    IF NOT EXISTS permissions (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         permission_key VARCHAR(30) NOT NULL UNIQUE,
         permission_name VARCHAR(50) NOT NULL,
@@ -729,11 +814,8 @@ INSERT IGNORE INTO permissions (permission_key, permission_name) VALUES
     ('approve', 'Approve'),
     ('submit',  'Submit');
 
--- =========================================
--- 4. ROLE PERMISSIONS
--- =========================================
 CREATE TABLE
-    role_permissions (
+    IF NOT EXISTS role_permissions (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         role_id BIGINT UNSIGNED NOT NULL,
         module_id BIGINT UNSIGNED NOT NULL,
@@ -748,7 +830,7 @@ CREATE TABLE
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE
-    rank_permissions (
+    IF NOT EXISTS rank_permissions (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         rank_key VARCHAR(30) NOT NULL,
         module_id BIGINT UNSIGNED NOT NULL,
@@ -1008,45 +1090,9 @@ VALUES
 VALUES
     (data_scope);
 
--- Count permissions by system role
-SELECT
-    r.role_name,
-    COUNT(rp.id) AS permission_count
-FROM
-    roles r
-    LEFT JOIN role_permissions rp ON rp.role_id = r.id
-GROUP BY
-    r.id,
-    r.role_name;
-
--- View rank permissions
-SELECT
-    rp.rank_key,
-    m.module_name,
-    p.permission_name,
-    rp.effect,
-    rp.data_scope
-FROM
-    rank_permissions rp
-    JOIN modules m ON m.id = rp.module_id
-    JOIN permissions p ON p.id = rp.permission_id
-ORDER BY
-    rp.rank_key,
-    m.sort_order,
-    p.id;
-
-ALTER TABLE employees
-ADD COLUMN manager_id BIGINT DEFAULT NULL AFTER `rank`,
-ADD INDEX idx_employees_manager (manager_id),
-ADD CONSTRAINT fk_employee_manager FOREIGN KEY (manager_id) REFERENCES employees (id) ON DELETE SET NULL ON UPDATE CASCADE;
-
 -- ============================================================
--- AUTO_INCREMENT VALUES
+-- 17. BACKUP & RESTORE LOGS
 -- ============================================================
-SET
-    FOREIGN_KEY_CHECKS = 1;
-
--- 1. Automatic backup execution history
 CREATE TABLE
     IF NOT EXISTS automatic_backup_logs (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1059,9 +1105,8 @@ CREATE TABLE
         message TEXT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY unique_scheduled_occurrence (scheduled_for)
-    );
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- 2. Automatic backup schedule change history
 CREATE TABLE
     IF NOT EXISTS backup_schedule_history (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1069,9 +1114,8 @@ CREATE TABLE
         new_settings JSON NOT NULL,
         changed_by VARCHAR(100) NULL,
         changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- 3. Database restore history
 CREATE TABLE
     IF NOT EXISTS restore_history (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1084,9 +1128,8 @@ CREATE TABLE
         message TEXT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY unique_restore_request (request_id)
-    );
+    ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- 4. Safety backups created before restore operations
 CREATE TABLE
     IF NOT EXISTS safety_backups (
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1098,6 +1141,9 @@ CREATE TABLE
         KEY idx_safety_restore_history (restore_history_id),
         CONSTRAINT fk_safety_restore_history FOREIGN KEY (restore_history_id) REFERENCES restore_history (id) ON DELETE SET NULL ON UPDATE CASCADE
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+SET
+    FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================
 -- END OF HRIS DATABASE INITIALIZATION
