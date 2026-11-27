@@ -742,3 +742,536 @@
     font-weight: 600;
     white-space: nowrap;
 }
+
+/* ============================================================
+   ADMIN DASHBOARD — MOONLIT THEME INTEGRATION
+   Uses the global HRIS design tokens
+   ============================================================ */
+
+/* Dashboard layout */
+.adash-grid {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows:
+        minmax(190px, auto)
+        minmax(220px, auto)
+        minmax(220px, auto)
+        minmax(240px, auto);
+    grid-template-areas:
+        "mbox-1 mbox-2 mbox-2"
+        "mbox-3 mbox-2 mbox-2"
+        "mbox-3 mbox-4 mbox-4"
+        "mbox-5 mbox-6 mbox-7";
+    gap: 16px;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Universal dashboard panel */
+.mbox {
+    min-width: 0;
+    min-height: 0;
+    padding: 20px;
+    gap: 14px;
+
+    background: linear-gradient(
+        155deg,
+        rgba(26, 35, 71, .94),
+        rgba(16, 22, 48, .96)
+    );
+
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+
+    box-shadow: 0 18px 40px rgba(4, 8, 22, .30);
+
+    color: var(--text);
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.mbox:hover {
+    border-color: rgba(118, 245, 232, .25);
+}
+
+.mbox-1 { grid-area: mbox-1; }
+.mbox-2 { grid-area: mbox-2; overflow-y: auto; }
+.mbox-3 { grid-area: mbox-3; }
+.mbox-4 { grid-area: mbox-4; overflow-y: auto; }
+.mbox-5 { grid-area: mbox-5; overflow-y: auto; }
+.mbox-6 { grid-area: mbox-6; overflow-y: auto; }
+.mbox-7 { grid-area: mbox-7; overflow-y: auto; }
+
+/* Headings */
+.mbox-title {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    text-transform: none;
+}
+
+.mbox-sub {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.mbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+/* Activity statistics */
+.mbox-1-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    flex: 1;
+}
+
+.mstat-card {
+    min-width: 0;
+    padding: 12px 8px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .025);
+    border: 1px solid var(--line);
+}
+
+.mstat-label {
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: .02em;
+}
+
+.mstat-num {
+    color: var(--text);
+    font-size: clamp(22px, 2vw, 30px);
+}
+
+.mstat-num.online {
+    color: var(--green);
+}
+
+.mstat-num.muted {
+    color: var(--muted);
+}
+
+/* Calendar navigation */
+.cal-nav {
+    flex-wrap: wrap;
+}
+
+.cal-nav-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: rgba(118, 245, 232, .07);
+    border: 1px solid rgba(118, 245, 232, .2);
+    color: var(--teal);
+}
+
+.cal-nav-btn:hover {
+    background: rgba(118, 245, 232, .15);
+    color: #fff;
+}
+
+.cal-month-select {
+    width: auto;
+    min-height: 32px;
+    padding: 5px 9px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    color: var(--text);
+    font-size: 11px;
+}
+
+#calMonthSelect { width: 115px; }
+#calYearSelect { width: 85px; }
+
+.cal-month-select option {
+    background: var(--panel);
+    color: var(--text);
+}
+
+.cal-badge {
+    background: rgba(251, 113, 133, .10);
+    border: 1px solid rgba(251, 113, 133, .25);
+    color: var(--danger);
+}
+
+/* Calendar */
+.cal-grid {
+    gap: 4px;
+}
+
+.cal-dow {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.cal-day {
+    min-height: 34px;
+    padding: 5px 2px;
+    border-radius: 8px;
+    color: var(--text);
+    transition: background .15s ease;
+}
+
+.cal-today {
+    background: rgba(118, 245, 232, .15);
+    outline: 1px solid rgba(118, 245, 232, .4);
+    color: var(--teal);
+}
+
+.cal-has-leave,
+.cal-has-holiday {
+    cursor: pointer;
+}
+
+.cal-has-leave:hover,
+.cal-has-holiday:hover {
+    background: rgba(59, 130, 246, .15);
+}
+
+.cal-dot {
+    background: var(--violet);
+}
+
+.cal-holiday-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--teal);
+    flex-shrink: 0;
+}
+
+.cal-legend {
+    color: var(--muted);
+}
+
+.dot-purple {
+    background: var(--violet);
+}
+
+/* Today's events */
+.cal-today-events {
+    border-top: 1px solid var(--line);
+}
+
+.cte-title {
+    color: var(--text);
+}
+
+.cte-date,
+.cte-empty,
+.cte-meta {
+    color: var(--muted);
+}
+
+.cte-row {
+    border-radius: 10px;
+}
+
+.cte-birthday {
+    background: rgba(245, 158, 11, .06);
+    border: 1px solid rgba(245, 158, 11, .15);
+}
+
+.cte-leave {
+    background: rgba(139, 92, 246, .08);
+    border: 1px solid rgba(139, 92, 246, .18);
+}
+
+.cte-name {
+    color: var(--text);
+}
+
+/* People tabs */
+.people-tab {
+    background: rgba(255, 255, 255, .025);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    border-radius: 9px;
+    min-height: 34px;
+}
+
+.people-tab.active,
+.people-tab:hover {
+    background: rgba(118, 245, 232, .10);
+    border-color: rgba(118, 245, 232, .35);
+    color: var(--teal);
+}
+
+/* People records */
+.people-row,
+.recent-row {
+    background: rgba(255, 255, 255, .025);
+    border: 1px solid rgba(42, 53, 102, .7);
+    border-radius: 10px;
+    padding: 10px;
+}
+
+.people-date strong {
+    color: var(--teal);
+}
+
+.people-date span,
+.people-dept,
+.people-day {
+    color: var(--muted);
+}
+
+.leave-date strong {
+    color: var(--green);
+}
+
+.people-name,
+.recent-action {
+    color: var(--text);
+}
+
+.recent-actor {
+    color: var(--muted);
+}
+
+.recent-time {
+    color: var(--muted);
+    opacity: .75;
+}
+
+/* Pagination */
+.people-pagination {
+    border-top: 1px solid var(--line);
+}
+
+.people-pagination button,
+.leave-pagination button {
+    background: rgba(118, 245, 232, .07);
+    border: 1px solid rgba(118, 245, 232, .2);
+    color: var(--teal);
+    border-radius: 8px;
+}
+
+.people-pagination button:hover:not(:disabled),
+.leave-pagination button:hover:not(:disabled) {
+    background: rgba(118, 245, 232, .16);
+    color: #fff;
+}
+
+.people-page-info,
+#leavePageInfo {
+    color: var(--teal);
+}
+
+/* Department distribution */
+.deptdist-summary strong {
+    color: var(--teal);
+}
+
+.deptdist-summary span,
+.deptdist-label {
+    color: var(--muted);
+}
+
+.deptdist-sep {
+    background: var(--line);
+}
+
+.deptdist-track {
+    background: rgba(255, 255, 255, .07);
+}
+
+.deptdist-fill {
+    background: var(--accent-grad);
+}
+
+.deptdist-count {
+    color: var(--teal);
+}
+
+/* Activity links and empty states */
+.adash-viewall {
+    color: var(--teal);
+}
+
+.adash-viewall:hover {
+    color: var(--moon);
+}
+
+.adash-empty {
+    color: var(--muted);
+}
+
+/* Modal */
+.adash-modal {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--text);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+}
+
+.adash-modal-header,
+.adash-modal-footer {
+    border-color: var(--line);
+}
+
+.adash-modal-header .modal-title,
+.adash-modal-info strong {
+    color: var(--text);
+}
+
+.adash-modal-row {
+    background: rgba(255, 255, 255, .035);
+    border: 1px solid var(--line);
+    border-radius: 11px;
+}
+
+.adash-modal-avatar {
+    background: rgba(118, 245, 232, .10);
+    color: var(--teal);
+}
+
+.adash-modal-type {
+    background: rgba(139, 92, 246, .12);
+    color: #c4b5fd;
+}
+
+.adash-modal-days {
+    color: var(--green);
+}
+
+.adash-modal-range,
+.adash-modal-empty {
+    color: var(--muted);
+}
+
+.adash-modal-btn {
+    background: rgba(118, 245, 232, .08);
+    border: 1px solid rgba(118, 245, 232, .25);
+    color: var(--teal);
+}
+
+.adash-modal-btn:hover {
+    background: rgba(118, 245, 232, .16);
+    color: #fff;
+}
+
+/* Chart */
+.chart-wrap {
+    min-width: 0;
+}
+
+/* Tablet */
+@media (max-width: 1100px) {
+    .adash-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: auto;
+        grid-template-areas:
+            "mbox-1 mbox-2"
+            "mbox-3 mbox-2"
+            "mbox-4 mbox-4"
+            "mbox-5 mbox-6"
+            "mbox-7 mbox-7";
+    }
+
+    .mbox-1,
+    .mbox-2,
+    .mbox-3,
+    .mbox-4,
+    .mbox-5,
+    .mbox-6,
+    .mbox-7 {
+        min-height: 240px;
+    }
+
+    .mbox-2 {
+        min-height: 490px;
+    }
+
+    .mbox-3 {
+        min-height: 490px;
+    }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+    .adash-grid {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "mbox-1"
+            "mbox-2"
+            "mbox-3"
+            "mbox-4"
+            "mbox-5"
+            "mbox-6"
+            "mbox-7";
+        gap: 12px;
+    }
+
+    .mbox {
+        padding: 15px;
+    }
+
+    .mbox-1,
+    .mbox-2,
+    .mbox-3,
+    .mbox-4,
+    .mbox-5,
+    .mbox-6,
+    .mbox-7 {
+        min-height: 0;
+    }
+
+    .mbox-1 {
+        min-height: 170px;
+    }
+
+    .mbox-2 {
+        min-height: 380px;
+    }
+
+    .mbox-3 {
+        min-height: 250px;
+    }
+
+    .mbox-4 {
+        min-height: 300px;
+    }
+
+    .mbox-5,
+    .mbox-6,
+    .mbox-7 {
+        min-height: 220px;
+    }
+
+    .cal-header {
+        flex-wrap: wrap;
+    }
+
+    .cal-day {
+        min-height: 38px;
+    }
+
+    .people-day {
+        font-size: 10px;
+    }
+
+    .adash-modal-meta {
+        align-items: flex-start;
+    }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+    .mbox,
+    .cal-day {
+        transition: none;
+    }
+}
