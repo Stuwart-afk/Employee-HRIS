@@ -134,7 +134,6 @@ try {
             'scope'  => $row['data_scope'],
         ];
     }
-
 } catch (Throwable $e) {
     error_log('Permission page loading failed: ' . $e->getMessage());
 
@@ -185,7 +184,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $configId = $roleIds[$configKey];
             $fixedScope = 'all';
-
         } else {
             if (!array_key_exists($configKey, $rankScopes)) {
                 throw new RuntimeException('Invalid employee rank.');
@@ -276,7 +274,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                 }
             }
-
         } else {
             // Replace this rank's complete configuration.
             $delete = $pdo->prepare("
@@ -316,7 +313,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         header('Location: /admin/permissions.php');
         exit;
-
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -407,452 +403,452 @@ require __DIR__ . '/../templates/adminTemplates/header.php';
 ?>
 
 <style>
-.user-management {
-    width: 100%;
-    max-width: 1200px;
-    margin-inline: auto;
-    padding: 0 20px 30px;
-    display: grid;
-    gap: 16px;
-    min-width: 0;
-}
-
-.user-management,
-.user-management * {
-    box-sizing: border-box;
-}
-
-.um-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    flex-wrap: wrap;
-}
-
-.um-heading h1 {
-    margin: 5px 0 6px;
-    font-size: clamp(25px, 3vw, 32px);
-}
-
-.um-heading p:not(.um-eyebrow) {
-    margin: 0;
-    color: var(--muted, #aaa0b2);
-    font-size: 13px;
-}
-
-.um-eyebrow {
-    margin: 0;
-    color: #8da8ff;
-    font-size: 10px;
-    letter-spacing: .14em;
-    font-weight: 800;
-}
-
-.um-metrics {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.um-metric,
-.um-role-card,
-.um-info-panel {
-    border: 1px solid var(--border, rgba(255,255,255,.08));
-    border-radius: 13px;
-    background: rgba(20, 27, 55, .72);
-}
-
-.um-metric {
-    padding: 15px 17px;
-}
-
-.um-metric span {
-    display: block;
-    color: var(--muted, #aaa0b2);
-    font-size: 12px;
-}
-
-.um-metric strong {
-    display: block;
-    margin-top: 7px;
-    font-size: 25px;
-}
-
-.um-alert {
-    padding: 11px 14px;
-    border-radius: 10px;
-    font-size: 12px;
-}
-
-.um-alert.success {
-    background: rgba(52,211,153,.1);
-    color: #a7f3d0;
-    border: 1px solid rgba(52,211,153,.25);
-}
-
-.um-alert.error {
-    background: rgba(248,113,113,.1);
-    color: #fecaca;
-    border: 1px solid rgba(248,113,113,.25);
-}
-
-.um-section-heading {
-    margin: 8px 0 0;
-    font-size: 15px;
-}
-
-.um-section-description {
-    margin: -9px 0 0;
-    color: var(--muted, #aaa0b2);
-    font-size: 12px;
-}
-
-.um-role-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
-}
-
-.um-role-card {
-    min-width: 0;
-    padding: 19px;
-    display: grid;
-    gap: 14px;
-}
-
-.um-role-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-}
-
-.um-role-card h2 {
-    margin: 0 0 5px;
-    font-size: 16px;
-}
-
-.um-role-card p {
-    margin: 0;
-    color: var(--muted, #aaa0b2);
-    font-size: 12px;
-    line-height: 1.5;
-}
-
-.um-role-count {
-    color: #a5b4fc;
-    background: rgba(99,102,241,.14);
-    border-radius: 999px;
-    padding: 5px 9px;
-    font-size: 10px;
-    font-weight: 750;
-    white-space: nowrap;
-}
-
-.um-role-bottom {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border, rgba(255,255,255,.08));
-}
-
-.um-role-bottom span {
-    color: var(--muted, #aaa0b2);
-    font-size: 11px;
-}
-
-.um-role-bottom button {
-    min-height: 35px;
-    padding: 7px 12px;
-}
-
-.um-info-panel {
-    padding: 17px 19px;
-}
-
-.um-info-panel h2 {
-    margin: 0 0 13px;
-    font-size: 14px;
-}
-
-.um-info-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-}
-
-.um-info-item strong {
-    display: block;
-    margin-bottom: 4px;
-    font-size: 12px;
-}
-
-.um-info-item span {
-    color: var(--muted, #aaa0b2);
-    font-size: 11px;
-    line-height: 1.5;
-}
-
-/* Modal */
-
-.permission-modal {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 18px;
-    background: rgba(8,7,12,.76);
-    backdrop-filter: blur(5px);
-}
-
-.permission-modal.is-open {
-    display: flex;
-}
-
-.pm-modal {
-    width: min(760px, 100%);
-    max-height: 90vh;
-    overflow: auto;
-    border: 1px solid var(--border, rgba(255,255,255,.12));
-    border-radius: 15px;
-    background: #171d36;
-    color: #f4eff8;
-    box-shadow: 0 24px 80px rgba(0,0,0,.48);
-}
-
-.pm-modal-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    padding: 19px 21px;
-    border-bottom: 1px solid rgba(255,255,255,.08);
-}
-
-.pm-modal-head h2 {
-    margin: 0 0 5px;
-    font-size: 19px;
-}
-
-.pm-modal-head p {
-    margin: 0;
-    color: var(--muted, #aaa0b2);
-    font-size: 12px;
-}
-
-.pm-close {
-    border: 0;
-    background: transparent;
-    color: #c9bfd2;
-    font-size: 25px;
-    cursor: pointer;
-}
-
-.pm-modal-body {
-    padding: 20px;
-}
-
-.pm-section-title {
-    margin-bottom: 5px;
-    font-size: 13px;
-    font-weight: 750;
-}
-
-.pm-section-description {
-    margin: 0 0 14px;
-    color: var(--muted, #aaa0b2);
-    font-size: 11px;
-}
-
-.pm-module-list {
-    display: grid;
-    gap: 9px;
-}
-
-.pm-module-card {
-    border: 1px solid rgba(255,255,255,.09);
-    border-radius: 10px;
-    overflow: hidden;
-}
-
-.pm-module-row {
-    min-height: 52px;
-    padding: 10px 13px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.pm-module-check {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    color: #f4eff8;
-    font-size: 12px;
-    font-weight: 650;
-}
-
-.pm-module-check input {
-    width: 16px;
-    height: 16px;
-    accent-color: #818cf8;
-    cursor: pointer;
-}
-
-.pm-module-actions {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-}
-
-.pm-module-status {
-    color: var(--muted, #aaa0b2);
-    font-size: 10px;
-}
-
-.pm-permission-toggle {
-    min-height: 30px;
-    padding: 5px 9px;
-    border: 1px solid rgba(141,168,255,.24);
-    border-radius: 7px;
-    background: rgba(126,151,255,.07);
-    color: #b7c5ff;
-    font-size: 10px;
-    font-weight: 750;
-    cursor: pointer;
-}
-
-.pm-permission-toggle:disabled {
-    opacity: .35;
-    cursor: not-allowed;
-}
-
-.pm-module-editor {
-    display: none;
-    padding: 14px;
-    border-top: 1px solid rgba(255,255,255,.08);
-    background: rgba(8,13,32,.45);
-}
-
-.pm-module-editor.is-visible {
-    display: block;
-}
-
-.pm-editor-heading {
-    margin: 0 0 12px;
-    font-size: 11px;
-    font-weight: 750;
-}
-
-.pm-fixed-scope {
-    margin: 0 0 13px;
-    padding: 9px 11px;
-    border: 1px solid rgba(141,168,255,.18);
-    border-radius: 8px;
-    background: rgba(99,102,241,.08);
-    color: #c7d2fe;
-    font-size: 11px;
-}
-
-.pm-permission-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-}
-
-.pm-action-option {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 40px;
-    padding: 8px 10px;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 8px;
-    background: rgba(255,255,255,.025);
-    font-size: 11px;
-}
-
-.pm-action-option label {
-    cursor: pointer;
-}
-
-.pm-action-option input {
-    width: 16px;
-    height: 16px;
-    accent-color: #34d399;
-    cursor: pointer;
-}
-
-.pm-modal-foot {
-    display: flex;
-    justify-content: flex-end;
-    gap: 9px;
-    padding: 14px 20px;
-    border-top: 1px solid rgba(255,255,255,.08);
-}
-
-.pm-modal-foot button {
-    min-height: 38px;
-    padding: 8px 15px;
-}
-
-@media(max-width:850px) {
-    .um-info-grid {
-        grid-template-columns: repeat(2, minmax(0,1fr));
-    }
-}
-
-@media(max-width:600px) {
     .user-management {
-        padding-inline: 13px;
+        width: 100%;
+        max-width: 1200px;
+        margin-inline: auto;
+        padding: 0 20px 30px;
+        display: grid;
+        gap: 16px;
+        min-width: 0;
     }
 
-    .um-role-grid {
-        grid-template-columns: 1fr;
+    .user-management,
+    .user-management * {
+        box-sizing: border-box;
+    }
+
+    .um-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        flex-wrap: wrap;
+    }
+
+    .um-heading h1 {
+        margin: 5px 0 6px;
+        font-size: clamp(25px, 3vw, 32px);
+    }
+
+    .um-heading p:not(.um-eyebrow) {
+        margin: 0;
+        color: var(--muted, #aaa0b2);
+        font-size: 13px;
+    }
+
+    .um-eyebrow {
+        margin: 0;
+        color: #8da8ff;
+        font-size: 10px;
+        letter-spacing: .14em;
+        font-weight: 800;
     }
 
     .um-metrics {
-        grid-template-columns: repeat(2, minmax(0,1fr));
-        gap: 8px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .um-metric,
+    .um-role-card,
+    .um-info-panel {
+        border: 1px solid var(--border, rgba(255, 255, 255, .08));
+        border-radius: 13px;
+        background: rgba(20, 27, 55, .72);
     }
 
     .um-metric {
-        padding: 12px;
+        padding: 15px 17px;
     }
 
-    .um-info-grid,
-    .pm-permission-grid {
-        grid-template-columns: 1fr;
+    .um-metric span {
+        display: block;
+        color: var(--muted, #aaa0b2);
+        font-size: 12px;
+    }
+
+    .um-metric strong {
+        display: block;
+        margin-top: 7px;
+        font-size: 25px;
+    }
+
+    .um-alert {
+        padding: 11px 14px;
+        border-radius: 10px;
+        font-size: 12px;
+    }
+
+    .um-alert.success {
+        background: rgba(52, 211, 153, .1);
+        color: #a7f3d0;
+        border: 1px solid rgba(52, 211, 153, .25);
+    }
+
+    .um-alert.error {
+        background: rgba(248, 113, 113, .1);
+        color: #fecaca;
+        border: 1px solid rgba(248, 113, 113, .25);
+    }
+
+    .um-section-heading {
+        margin: 8px 0 0;
+        font-size: 15px;
+    }
+
+    .um-section-description {
+        margin: -9px 0 0;
+        color: var(--muted, #aaa0b2);
+        font-size: 12px;
+    }
+
+    .um-role-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .um-role-card {
+        min-width: 0;
+        padding: 19px;
+        display: grid;
+        gap: 14px;
+    }
+
+    .um-role-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .um-role-card h2 {
+        margin: 0 0 5px;
+        font-size: 16px;
+    }
+
+    .um-role-card p {
+        margin: 0;
+        color: var(--muted, #aaa0b2);
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+    .um-role-count {
+        color: #a5b4fc;
+        background: rgba(99, 102, 241, .14);
+        border-radius: 999px;
+        padding: 5px 9px;
+        font-size: 10px;
+        font-weight: 750;
+        white-space: nowrap;
+    }
+
+    .um-role-bottom {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border, rgba(255, 255, 255, .08));
+    }
+
+    .um-role-bottom span {
+        color: var(--muted, #aaa0b2);
+        font-size: 11px;
+    }
+
+    .um-role-bottom button {
+        min-height: 35px;
+        padding: 7px 12px;
+    }
+
+    .um-info-panel {
+        padding: 17px 19px;
+    }
+
+    .um-info-panel h2 {
+        margin: 0 0 13px;
+        font-size: 14px;
+    }
+
+    .um-info-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .um-info-item strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 12px;
+    }
+
+    .um-info-item span {
+        color: var(--muted, #aaa0b2);
+        font-size: 11px;
+        line-height: 1.5;
+    }
+
+    /* Modal */
+
+    .permission-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+        background: rgba(8, 7, 12, .76);
+        backdrop-filter: blur(5px);
+    }
+
+    .permission-modal.is-open {
+        display: flex;
     }
 
     .pm-modal {
-        max-height: 95vh;
+        width: min(760px, 100%);
+        max-height: 90vh;
+        overflow: auto;
+        border: 1px solid var(--border, rgba(255, 255, 255, .12));
+        border-radius: 15px;
+        background: #171d36;
+        color: #f4eff8;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, .48);
     }
 
-    .pm-modal-foot {
-        flex-direction: column-reverse;
+    .pm-modal-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 19px 21px;
+        border-bottom: 1px solid rgba(255, 255, 255, .08);
     }
 
-    .pm-modal-foot button {
-        width: 100%;
+    .pm-modal-head h2 {
+        margin: 0 0 5px;
+        font-size: 19px;
+    }
+
+    .pm-modal-head p {
+        margin: 0;
+        color: var(--muted, #aaa0b2);
+        font-size: 12px;
+    }
+
+    .pm-close {
+        border: 0;
+        background: transparent;
+        color: #c9bfd2;
+        font-size: 25px;
+        cursor: pointer;
+    }
+
+    .pm-modal-body {
+        padding: 20px;
+    }
+
+    .pm-section-title {
+        margin-bottom: 5px;
+        font-size: 13px;
+        font-weight: 750;
+    }
+
+    .pm-section-description {
+        margin: 0 0 14px;
+        color: var(--muted, #aaa0b2);
+        font-size: 11px;
+    }
+
+    .pm-module-list {
+        display: grid;
+        gap: 9px;
+    }
+
+    .pm-module-card {
+        border: 1px solid rgba(255, 255, 255, .09);
+        border-radius: 10px;
+        overflow: hidden;
     }
 
     .pm-module-row {
-        align-items: flex-start;
+        min-height: 52px;
+        padding: 10px 13px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .pm-module-check {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        color: #f4eff8;
+        font-size: 12px;
+        font-weight: 650;
+    }
+
+    .pm-module-check input {
+        width: 16px;
+        height: 16px;
+        accent-color: #818cf8;
+        cursor: pointer;
+    }
+
+    .pm-module-actions {
+        display: flex;
+        align-items: center;
+        gap: 9px;
     }
 
     .pm-module-status {
-        display: none;
+        color: var(--muted, #aaa0b2);
+        font-size: 10px;
     }
-}
+
+    .pm-permission-toggle {
+        min-height: 30px;
+        padding: 5px 9px;
+        border: 1px solid rgba(141, 168, 255, .24);
+        border-radius: 7px;
+        background: rgba(126, 151, 255, .07);
+        color: #b7c5ff;
+        font-size: 10px;
+        font-weight: 750;
+        cursor: pointer;
+    }
+
+    .pm-permission-toggle:disabled {
+        opacity: .35;
+        cursor: not-allowed;
+    }
+
+    .pm-module-editor {
+        display: none;
+        padding: 14px;
+        border-top: 1px solid rgba(255, 255, 255, .08);
+        background: rgba(8, 13, 32, .45);
+    }
+
+    .pm-module-editor.is-visible {
+        display: block;
+    }
+
+    .pm-editor-heading {
+        margin: 0 0 12px;
+        font-size: 11px;
+        font-weight: 750;
+    }
+
+    .pm-fixed-scope {
+        margin: 0 0 13px;
+        padding: 9px 11px;
+        border: 1px solid rgba(141, 168, 255, .18);
+        border-radius: 8px;
+        background: rgba(99, 102, 241, .08);
+        color: #c7d2fe;
+        font-size: 11px;
+    }
+
+    .pm-permission-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .pm-action-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 40px;
+        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, .08);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, .025);
+        font-size: 11px;
+    }
+
+    .pm-action-option label {
+        cursor: pointer;
+    }
+
+    .pm-action-option input {
+        width: 16px;
+        height: 16px;
+        accent-color: #34d399;
+        cursor: pointer;
+    }
+
+    .pm-modal-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 9px;
+        padding: 14px 20px;
+        border-top: 1px solid rgba(255, 255, 255, .08);
+    }
+
+    .pm-modal-foot button {
+        min-height: 38px;
+        padding: 8px 15px;
+    }
+
+    @media(max-width:850px) {
+        .um-info-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media(max-width:600px) {
+        .user-management {
+            padding-inline: 13px;
+        }
+
+        .um-role-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .um-metrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .um-metric {
+            padding: 12px;
+        }
+
+        .um-info-grid,
+        .pm-permission-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .pm-modal {
+            max-height: 95vh;
+        }
+
+        .pm-modal-foot {
+            flex-direction: column-reverse;
+        }
+
+        .pm-modal-foot button {
+            width: 100%;
+        }
+
+        .pm-module-row {
+            align-items: flex-start;
+        }
+
+        .pm-module-status {
+            display: none;
+        }
+    }
 </style>
 
 <div class="user-management">
@@ -1099,6 +1095,10 @@ require __DIR__ . '/../templates/adminTemplates/header.php';
 
                             <?php
                             $moduleKey = $module['module_key'];
+                            // Dashboard is not configurable through the permission editor.
+                            if ($moduleKey === 'dashboard') {
+                                continue;
+                            }
                             $isActive = (bool) $module['is_active'];
 
                             $hasModuleAccess = isset($currentData[$moduleKey]);
@@ -1167,8 +1167,8 @@ require __DIR__ . '/../templates/adminTemplates/header.php';
                                                 if ($config['type'] === 'role') {
                                                     $currentValue =
                                                         ($currentData[$moduleKey][$actionKey] ?? 'none') !== 'none'
-                                                            ? 'allow'
-                                                            : 'deny';
+                                                        ? 'allow'
+                                                        : 'deny';
                                                 } else {
                                                     $currentValue =
                                                         $currentData[$moduleKey][$actionKey]['effect'] ?? 'deny';
@@ -1232,102 +1232,103 @@ require __DIR__ . '/../templates/adminTemplates/header.php';
 <?php endforeach; ?>
 
 <script>
-document.addEventListener('DOMContentLoaded', function () {
+    document.addEventListener('DOMContentLoaded', function() {
 
-    function openModal(modalId) {
-        const modal = document.getElementById(modalId);
+        function openModal(modalId) {
+            const modal = document.getElementById(modalId);
 
-        if (!modal) return;
+            if (!modal) return;
 
-        modal.classList.add('is-open');
-        modal.setAttribute('aria-hidden', 'false');
-        document.body.style.overflow = 'hidden';
-    }
-
-    function closeModal(modalId) {
-        const modal = document.getElementById(modalId);
-
-        if (!modal) return;
-
-        modal.classList.remove('is-open');
-        modal.setAttribute('aria-hidden', 'true');
-        document.body.style.overflow = '';
-    }
-
-    // Open modal.
-    document.querySelectorAll('.pm-open').forEach(function (button) {
-        button.addEventListener('click', function () {
-            openModal(button.dataset.modal);
-        });
-    });
-
-    // Close buttons and Cancel buttons.
-    document.querySelectorAll('[data-close-modal]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            closeModal(button.dataset.closeModal);
-        });
-    });
-
-    // Close when clicking the backdrop.
-    document.querySelectorAll('.permission-modal').forEach(function (modal) {
-        modal.addEventListener('click', function (event) {
-            if (event.target === modal) {
-                closeModal(modal.id);
-            }
-        });
-    });
-
-    // Close with Escape.
-    document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape') {
-            const openModal = document.querySelector('.permission-modal.is-open');
-
-            if (openModal) {
-                closeModal(openModal.id);
-            }
-        }
-    });
-
-    // Enable or disable each module's permission controls.
-    document.querySelectorAll('.pm-module-card').forEach(function (card) {
-
-        const checkbox = card.querySelector('.pm-module-checkbox');
-        const toggle = card.querySelector('.pm-permission-toggle');
-        const editor = card.querySelector('.pm-module-editor');
-        const status = card.querySelector('.pm-module-status');
-
-        if (!checkbox || !toggle || !editor || !status) return;
-
-        function updateModuleState() {
-            const enabled = checkbox.checked;
-
-            toggle.disabled = !enabled;
-            status.textContent = enabled ? 'Enabled' : 'Disabled';
-
-            if (!enabled) {
-                editor.classList.remove('is-visible');
-                toggle.textContent = 'Permissions';
-            }
+            modal.classList.add('is-open');
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
         }
 
-        checkbox.addEventListener('change', updateModuleState);
+        function closeModal(modalId) {
+            const modal = document.getElementById(modalId);
 
-        toggle.addEventListener('click', function () {
-            if (toggle.disabled) return;
+            if (!modal) return;
 
-            const visible = editor.classList.toggle('is-visible');
+            modal.classList.remove('is-open');
+            modal.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
 
-            toggle.textContent = visible
-                ? 'Hide permissions'
-                : 'Permissions';
+        // Open modal.
+        document.querySelectorAll('.pm-open').forEach(function(button) {
+            button.addEventListener('click', function() {
+                openModal(button.dataset.modal);
+            });
         });
 
-        updateModuleState();
-    });
+        // Close buttons and Cancel buttons.
+        document.querySelectorAll('[data-close-modal]').forEach(function(button) {
+            button.addEventListener('click', function() {
+                closeModal(button.dataset.closeModal);
+            });
+        });
 
-});
+        // Close when clicking the backdrop.
+        document.querySelectorAll('.permission-modal').forEach(function(modal) {
+            modal.addEventListener('click', function(event) {
+                if (event.target === modal) {
+                    closeModal(modal.id);
+                }
+            });
+        });
+
+        // Close with Escape.
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                const openModal = document.querySelector('.permission-modal.is-open');
+
+                if (openModal) {
+                    closeModal(openModal.id);
+                }
+            }
+        });
+
+        // Enable or disable each module's permission controls.
+        document.querySelectorAll('.pm-module-card').forEach(function(card) {
+
+            const checkbox = card.querySelector('.pm-module-checkbox');
+            const toggle = card.querySelector('.pm-permission-toggle');
+            const editor = card.querySelector('.pm-module-editor');
+            const status = card.querySelector('.pm-module-status');
+
+            if (!checkbox || !toggle || !editor || !status) return;
+
+            function updateModuleState() {
+                const enabled = checkbox.checked;
+
+                toggle.disabled = !enabled;
+                status.textContent = enabled ? 'Enabled' : 'Disabled';
+
+                if (!enabled) {
+                    editor.classList.remove('is-visible');
+                    toggle.textContent = 'Permissions';
+                }
+            }
+
+            checkbox.addEventListener('change', updateModuleState);
+
+            toggle.addEventListener('click', function() {
+                if (toggle.disabled) return;
+
+                const visible = editor.classList.toggle('is-visible');
+
+                toggle.textContent = visible ?
+                    'Hide permissions' :
+                    'Permissions';
+            });
+
+            updateModuleState();
+        });
+
+    });
 </script>
 
 </main>
 </body>
+
 </html>
