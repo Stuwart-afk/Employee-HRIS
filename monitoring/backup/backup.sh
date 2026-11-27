@@ -1098,3 +1098,5 @@ while true; do
     sleep "$POLL_INTERVAL"
 done
 
+# docker ps --filter "name=hris_backup"
+# docker logs --tail 30 hris_backup
