@@ -17,6 +17,71 @@ if (!$employeeId) {
     exit('No employee record is linked to this user account.');
 }
 
+function emp_ps_has_table(PDO $pdo, string $table): bool {
+    $stmt = $pdo->prepare(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+    );
+    $stmt->execute([$table]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+function emp_ps_get_benefits(PDO $pdo, int $employeeId, ?string $refDate = null): array {
+    $empty = [
+        'items'         => [],
+        'monthly_total' => 0.0,
+        'cutoff_total'  => 0.0,
+        'summary_text'  => '',
+    ];
+
+    if ($employeeId <= 0 || !emp_ps_has_table($pdo, 'employee_benefits') || !emp_ps_has_table($pdo, 'benefit_plans')) {
+        return $empty;
+    }
+
+    try {
+        $dateCheck = ($refDate && strtotime($refDate) !== false) ? date('Y-m-d', strtotime($refDate)) : date('Y-m-d');
+        $sql = "
+            SELECT
+                COALESCE(eb.custom_amount, bp.default_amount) AS amount,
+                bp.name AS plan_name
+            FROM `employee_benefits` eb
+            JOIN `benefit_plans` bp ON bp.id = eb.benefit_plan_id
+            WHERE eb.employee_id = :employee_id
+              AND LOWER(TRIM(COALESCE(eb.status, 'Active'))) = 'active'
+              AND eb.effective_date <= :ref_date
+              AND (eb.end_date IS NULL OR eb.end_date >= :ref_date_end)
+            ORDER BY bp.name ASC
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([
+            ':employee_id'  => $employeeId,
+            ':ref_date'     => $dateCheck,
+            ':ref_date_end' => $dateCheck,
+        ]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $monthlyTotal = 0.0;
+        $names = [];
+        foreach ($rows as $r) {
+            $amt = round((float)($r['amount'] ?? 0), 2);
+            $monthlyTotal += $amt;
+            $names[] = (string)($r['plan_name'] ?? 'Benefit');
+        }
+
+        $monthlyTotal = round($monthlyTotal, 2);
+        $cutoffTotal  = round($monthlyTotal / 2, 2);
+
+        return [
+            'items'         => $rows,
+            'monthly_total' => $monthlyTotal,
+            'cutoff_total'  => $cutoffTotal,
+            'summary_text'  => implode(', ', $names),
+        ];
+    } catch (Throwable $e) {
+        error_log('emp_ps_get_benefits error: ' . $e->getMessage());
+        return $empty;
+    }
+}
+
 $stmt = $pdo->prepare("
     SELECT id, email, first_name, last_name
     FROM employees
@@ -39,11 +104,6 @@ $user = [
     'avatar'    => 'https://ui-avatars.com/api/?name=' . urlencode($fullName) . '&background=4763ff&color=fff',
 ];
 
-/* ---------------------------------------------------------------
- * Fetch all payslips for this employee from the real payslips table,
- * joined with payroll_periods for label + date range.
- * Ordered newest period first.
- * ------------------------------------------------------------- */
 $payslips = [];
 try {
     $psStmt = $pdo->prepare("
@@ -55,8 +115,6 @@ try {
             ps.days_worked,
             (ps.days_worked * 8) AS hours_worked,
             ps.late_minutes,
-            -- A payslip in a Paid period is paid, even if its own row was
-            -- finalized before the period was closed.
             CASE
                 WHEN pp.status = 'Paid' THEN 'Paid'
                 ELSE ps.status
@@ -71,19 +129,24 @@ try {
     ");
     $psStmt->execute([':eid' => $employeeId]);
     $payslips = $psStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($payslips as &$psItem) {
+        $bData = emp_ps_get_benefits($pdo, (int)$employeeId, (string)($psItem['period_end'] ?? date('Y-m-d')));
+        $psItem['benefits_cutoff']  = $bData['cutoff_total'];
+        $psItem['benefits_monthly'] = $bData['monthly_total'];
+        $psItem['benefits_names']   = $bData['summary_text'];
+    }
+    unset($psItem);
 } catch (Throwable $e) {
     error_log('Payslip list query failed: ' . $e->getMessage());
 }
 
-/* ---------------------------------------------------------------
- * Metric card values — driven by the most recent payslip row.
- * Falls back to zeroes / "Pending" when no payslip exists yet.
- * ------------------------------------------------------------- */
-$latest      = $payslips[0] ?? null;
-$latestHours = $latest ? (float) $latest['hours_worked'] : 0.0;
-$latestGross = $latest ? (float) $latest['gross_pay']    : 0.0;
-$latestNet   = $latest ? (float) $latest['net_pay']      : 0.0;
-$latestLabel = $latest
+$latest        = $payslips[0] ?? null;
+$latestHours   = $latest ? (float) $latest['hours_worked'] : 0.0;
+$latestGross   = $latest ? (float) $latest['gross_pay']    : 0.0;
+$latestNet     = $latest ? (float) $latest['net_pay']      : 0.0;
+$latestBenefit = $latest ? (float) ($latest['benefits_cutoff'] ?? 0.0) : 0.0;
+$latestLabel   = $latest
     ? htmlspecialchars($latest['period_label'], ENT_QUOTES, 'UTF-8')
     : date('M Y');
 $latestStatus = $latest ? strtolower((string) $latest['status']) : 'pending';
@@ -92,11 +155,7 @@ if ($latestStatus === 'draft') {
 }
 $hasPayroll  = !empty($payslips);
 
-/* ---------------------------------------------------------------
- * Pill helper — maps DB status → CSS class + display label.
- * ------------------------------------------------------------- */
 function payslipPill(string $status): array {
-    // DB values are capitalised (Draft, Finalized, Paid), so compare lower-case.
     return match (strtolower(trim($status))) {
         'paid'      => ['pill-active',  'Paid'],
         'finalized' => ['pill-warning', 'Finalized'],
@@ -105,7 +164,6 @@ function payslipPill(string $status): array {
     };
 }
 
-// Shell configuration
 $title    = 'Payslips';
 $eyebrow  = 'PAYROLL';
 $subtitle = 'Your pay periods and earnings summary';
@@ -117,7 +175,7 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
   <div class="ph-text">
     <p class="eyebrow">PAYROLL</p>
     <h1>Payslips</h1>
-    <p>Your computed earnings for each semi-monthly pay period.</p>
+    <p>Your computed earnings and assigned benefits for each semi-monthly pay period.</p>
   </div>
 </section>
 
@@ -132,7 +190,7 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
     <div class="metric-top"><span class="metric-ico">₱</span><span class="metric-chip">Gross</span></div>
     <span class="metric-title">Gross Pay</span>
     <strong class="metric-number blue">₱<?= number_format($latestGross, 2) ?></strong>
-    <span class="metric-description">Before deductions</span>
+    <span class="metric-description">Includes ₱<?= number_format($latestBenefit, 2) ?> cut-off benefits</span>
   </article>
   <article class="metric-card metric-green">
     <div class="metric-top"><span class="metric-ico">✓</span><span class="metric-chip">Net</span></div>
@@ -178,6 +236,7 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
         <th>Pay Period</th>
         <th>Inclusive Dates</th>
         <th>Hours</th>
+        <th>Benefits (Cut-Off)</th>
         <th>Gross Pay</th>
         <th>Deductions</th>
         <th>Net Pay</th>
@@ -188,7 +247,7 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
     <tbody>
       <?php if (empty($payslips)): ?>
         <tr>
-          <td colspan="8" style="text-align:center;padding:32px;" class="muted">
+          <td colspan="9" style="text-align:center;padding:32px;" class="muted">
             No payslip records found.
           </td>
         </tr>
@@ -203,6 +262,12 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
             <td><strong><?= htmlspecialchars($ps['period_label'], ENT_QUOTES, 'UTF-8') ?></strong></td>
             <td class="muted"><?= htmlspecialchars($dateRange) ?></td>
             <td><?= number_format((float) $ps['hours_worked'], 1) ?> hrs</td>
+            <td>
+              ₱<?= number_format((float) ($ps['benefits_cutoff'] ?? 0), 2) ?>
+              <?php if (!empty($ps['benefits_names'])): ?>
+                <div class="muted" style="font-size:11px;"><?= htmlspecialchars((string)$ps['benefits_names'], ENT_QUOTES, 'UTF-8') ?></div>
+              <?php endif; ?>
+            </td>
             <td>₱<?= number_format((float) $ps['gross_pay'], 2) ?></td>
             <td class="muted">– ₱<?= number_format((float) $ps['total_deductions'], 2) ?></td>
             <td><strong class="col-net">₱<?= number_format((float) $ps['net_pay'], 2) ?></strong></td>
