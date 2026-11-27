@@ -24,6 +24,7 @@ $backupSettings = [
     'backup_time' => '02:00',
     'backup_day' => 1,
     'retention_days' => 30,
+    'timezone' => 'Asia/Manila',
 ];
 
 try {
@@ -34,8 +35,9 @@ try {
             backup_minute,
             backup_time,
             backup_day,
-            retention_days
-        FROM backup_settings
+            retention_days,
+            timezone
+        FROM hris_backup_metadata.backup_settings
         WHERE id = 1
         LIMIT 1
     ");
@@ -84,6 +86,124 @@ try {
     error_log('Unable to load backup activity logs: ' . $e->getMessage());
 }
 
+// ==========================================
+// CURRENT SCHEDULE SUMMARY
+// ==========================================
+
+$scheduleTimezoneName = $backupSettings['timezone'] ?? 'Asia/Manila';
+
+try {
+    $scheduleTimezone = new DateTimeZone($scheduleTimezoneName);
+} catch (Exception $e) {
+    $scheduleTimezoneName = 'Asia/Manila';
+    $scheduleTimezone = new DateTimeZone($scheduleTimezoneName);
+}
+
+$scheduleEnabled = (int) ($backupSettings['enabled'] ?? 0) === 1;
+$scheduleFrequency = (string) ($backupSettings['frequency'] ?? 'daily');
+$scheduleMinute = (int) ($backupSettings['backup_minute'] ?? 0);
+$scheduleTime = substr(
+    (string) ($backupSettings['backup_time'] ?? '02:00'),
+    0,
+    5
+);
+$scheduleDay = (int) ($backupSettings['backup_day'] ?? 1);
+
+$dayNames = [
+    1 => 'Monday',
+    2 => 'Tuesday',
+    3 => 'Wednesday',
+    4 => 'Thursday',
+    5 => 'Friday',
+    6 => 'Saturday',
+    7 => 'Sunday',
+];
+
+$currentScheduleLabel = 'Disabled';
+$nextScheduledRun = null;
+
+if ($scheduleEnabled) {
+    switch ($scheduleFrequency) {
+        case 'hourly':
+            $currentScheduleLabel =
+                'Every hour at minute ' .
+                str_pad((string) $scheduleMinute, 2, '0', STR_PAD_LEFT);
+
+            $now = new DateTimeImmutable('now', $scheduleTimezone);
+
+            $nextScheduledRun = $now->setTime(
+                (int) $now->format('H'),
+                $scheduleMinute,
+                0
+            );
+
+            // The next run must be in the future.
+            if ($nextScheduledRun <= $now) {
+                $nextScheduledRun = $nextScheduledRun->modify('+1 hour');
+            }
+
+            break;
+
+        case 'weekly':
+            $timeParts = explode(':', $scheduleTime);
+            $scheduleHour = (int) ($timeParts[0] ?? 0);
+            $scheduleMinuteOfHour = (int) ($timeParts[1] ?? 0);
+
+            $currentScheduleLabel =
+                'Every ' .
+                ($dayNames[$scheduleDay] ?? 'Monday') .
+                ' at ' .
+                $scheduleTime;
+
+            $now = new DateTimeImmutable('now', $scheduleTimezone);
+
+            $daysUntilScheduled =
+                ($scheduleDay - (int) $now->format('N') + 7) % 7;
+
+            $nextScheduledRun = $now
+                ->modify("+{$daysUntilScheduled} days")
+                ->setTime(
+                    $scheduleHour,
+                    $scheduleMinuteOfHour,
+                    0
+                );
+
+            // If today's scheduled time already passed, use next week.
+            if ($nextScheduledRun <= $now) {
+                $nextScheduledRun = $nextScheduledRun->modify('+7 days');
+            }
+
+            break;
+
+        case 'daily':
+        default:
+            $timeParts = explode(':', $scheduleTime);
+            $scheduleHour = (int) ($timeParts[0] ?? 0);
+            $scheduleMinuteOfHour = (int) ($timeParts[1] ?? 0);
+
+            $currentScheduleLabel =
+                'Every day at ' . $scheduleTime;
+
+            $now = new DateTimeImmutable('now', $scheduleTimezone);
+
+            $nextScheduledRun = $now->setTime(
+                $scheduleHour,
+                $scheduleMinuteOfHour,
+                0
+            );
+
+            // If today's scheduled time already passed, use tomorrow.
+            if ($nextScheduledRun <= $now) {
+                $nextScheduledRun = $nextScheduledRun->modify('+1 day');
+            }
+
+            break;
+    }
+}
+
+$nextScheduledRunLabel = $nextScheduledRun
+    ? $nextScheduledRun->format('M d, Y h:i A T')
+    : 'Not scheduled';
 require __DIR__ . '/../templates/adminTemplates/header.php';
 
 
@@ -1265,6 +1385,69 @@ foreach ($activityDates as $activity) {
 
                     <i class="fas fa-times"></i>
                 </button>
+            </div>
+
+            <div class="backup-schedule-summary">
+
+                <div class="backup-schedule-summary-heading">
+                    <div>
+                        <span class="backup-schedule-summary-eyebrow">
+                            Current Automatic Backup Schedule
+                        </span>
+
+                        <strong>
+                            <?= htmlspecialchars(
+                                $currentScheduleLabel,
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>
+                        </strong>
+                    </div>
+
+                    <span class="backup-status <?= $scheduleEnabled ? 'success' : 'failed' ?>">
+                        <?= $scheduleEnabled ? 'Enabled' : 'Disabled' ?>
+                    </span>
+                </div>
+
+                <div class="backup-schedule-summary-grid">
+
+                    <div class="backup-schedule-summary-item">
+                        <span>Next expected run</span>
+
+                        <strong>
+                            <?= htmlspecialchars(
+                                $nextScheduledRunLabel,
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>
+                        </strong>
+                    </div>
+
+                    <div class="backup-schedule-summary-item">
+                        <span>Timezone</span>
+
+                        <strong>
+                            <?= htmlspecialchars(
+                                $scheduleTimezoneName,
+                                ENT_QUOTES,
+                                'UTF-8'
+                            ) ?>
+                        </strong>
+                    </div>
+
+                </div>
+
+                <?php if ($scheduleEnabled): ?>
+                    <p class="backup-schedule-summary-note">
+                        The backup worker checks this schedule every few seconds.
+                        The next backup will be created automatically at the displayed time.
+                    </p>
+                <?php else: ?>
+                    <p class="backup-schedule-summary-note warning">
+                        Automatic backups are currently disabled.
+                    </p>
+                <?php endif; ?>
+
             </div>
 
 
