@@ -1,6 +1,15 @@
 <?php
 session_start();
 
+require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../classes/AuditLogger.php';
+
+if (!empty($_SESSION['user_id'])) {
+    AuditLogger::log('logout', 'user', (int)$_SESSION['user_id'], [
+        'username' => $_SESSION['username'] ?? null,
+    ]);
+}
+
 // Clear all session data
 $_SESSION = [];
 

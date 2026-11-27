@@ -12,6 +12,9 @@
     flex-direction: column;
     gap: 1.25rem;
     min-width: 0;
+    width: min(1480px, calc(100% - 3rem));
+    margin: 0 auto;
+    padding-top: 1.75rem;
     padding-bottom: 2rem;
     color: var(--text);
 }
@@ -726,6 +729,11 @@
 }
 
 @media (max-width: 700px) {
+    .audit-page {
+        width: min(100% - 1.5rem, 1480px);
+        padding-top: 1rem;
+    }
+
     .audit-heading {
         align-items: stretch;
     }
