@@ -5,6 +5,84 @@ require_access('payslips', 'view', 'all');
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../classes/Payroll.php';
 
+function pv_has_table(PDO $pdo, string $table): bool {
+    $stmt = $pdo->prepare(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+    );
+    $stmt->execute([$table]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+function pv_get_employee_benefits(PDO $pdo, int $employeeId, string $payType = 'Monthly', ?string $refDate = null): array {
+    $empty = [
+        'items'         => [],
+        'monthly_total' => 0.0,
+        'cutoff_total'  => 0.0,
+    ];
+
+    if ($employeeId <= 0 || !pv_has_table($pdo, 'employee_benefits') || !pv_has_table($pdo, 'benefit_plans')) {
+        return $empty;
+    }
+
+    try {
+        $dateCheck = ($refDate && strtotime($refDate) !== false) ? date('Y-m-d', strtotime($refDate)) : date('Y-m-d');
+        $sql = "
+            SELECT
+                eb.id,
+                COALESCE(eb.custom_amount, bp.default_amount) AS amount,
+                eb.effective_date,
+                eb.notes,
+                bp.name AS plan_name,
+                bp.category,
+                bp.is_taxable
+            FROM `employee_benefits` eb
+            JOIN `benefit_plans` bp ON bp.id = eb.benefit_plan_id
+            WHERE eb.employee_id = :employee_id
+              AND LOWER(TRIM(COALESCE(eb.status, 'Active'))) = 'active'
+              AND eb.effective_date <= :ref_date
+              AND (eb.end_date IS NULL OR eb.end_date >= :ref_date_end)
+            ORDER BY bp.category ASC, bp.name ASC
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([
+            ':employee_id'  => $employeeId,
+            ':ref_date'     => $dateCheck,
+            ':ref_date_end' => $dateCheck,
+        ]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $items = [];
+        $monthlyTotal = 0.0;
+
+        foreach ($rows as $r) {
+            $amt = round((float)($r['amount'] ?? 0), 2);
+            $monthlyTotal += $amt;
+            $items[] = [
+                'plan_name'  => (string)($r['plan_name'] ?? 'Benefit'),
+                'category'   => (string)($r['category'] ?? 'Allowance'),
+                'amount'     => $amt,
+                'cutoff_amt' => (strtolower(trim($payType)) === 'monthly') ? round($amt / 2, 2) : $amt,
+                'is_taxable' => !empty($r['is_taxable']),
+                'notes'      => (string)($r['notes'] ?? ''),
+            ];
+        }
+
+        $monthlyTotal = round($monthlyTotal, 2);
+        $cutoffTotal  = (strtolower(trim($payType)) === 'monthly')
+            ? round($monthlyTotal / 2, 2)
+            : $monthlyTotal;
+
+        return [
+            'items'         => $items,
+            'monthly_total' => $monthlyTotal,
+            'cutoff_total'  => $cutoffTotal,
+        ];
+    } catch (Throwable $e) {
+        error_log('pv_get_employee_benefits error: ' . $e->getMessage());
+        return $empty;
+    }
+}
+
 $payroll = new Payroll($pdo);
 
 $id = (int)($_GET['id'] ?? 0);
@@ -18,6 +96,13 @@ if (!$ps) {
     http_response_code(404);
     die('Payslip not found.');
 }
+
+$empBenefits = pv_get_employee_benefits(
+    $pdo,
+    (int)($ps['employee_id'] ?? 0),
+    (string)($ps['pay_type'] ?? 'Monthly'),
+    (string)($ps['end_date'] ?? date('Y-m-d'))
+);
 
 require __DIR__ . '/../templates/hrTemplates/header.php';
 ?>
@@ -182,6 +267,40 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
       </div>
     </div>
 
+  </div>
+
+  <!-- ── Assigned Employee Benefits ─────────────────────────────────────── -->
+  <div class="section" style="margin-bottom:16px">
+    <div class="section-title">Assigned Benefits</div>
+    <?php if (empty($empBenefits['items'])): ?>
+      <div class="slip-row">
+        <span class="label" style="color:#6b7280">No active benefits assigned for this employee.</span>
+        <span class="amount">₱0.00</span>
+      </div>
+    <?php else: ?>
+      <?php foreach ($empBenefits['items'] as $benItem): ?>
+        <div class="slip-row">
+          <span class="label">
+            <?= htmlspecialchars($benItem['plan_name'], ENT_QUOTES, 'UTF-8') ?>
+            <small style="color:#6b7280">
+              (<?= htmlspecialchars($benItem['category'], ENT_QUOTES, 'UTF-8') ?>
+              • <?= $benItem['is_taxable'] ? 'Taxable' : 'Non-Taxable' ?>
+              • Monthly: ₱<?= number_format((float)$benItem['amount'], 2) ?>)
+            </small>
+          </span>
+          <span class="amount text-green">₱<?= number_format((float)$benItem['cutoff_amt'], 2) ?></span>
+        </div>
+      <?php endforeach; ?>
+      <div class="slip-row total">
+        <span class="label">
+          Benefits (This Cut-Off)
+          <small style="color:#6b7280;font-weight:400">
+            — Monthly Total: ₱<?= number_format((float)$empBenefits['monthly_total'], 2) ?>
+          </small>
+        </span>
+        <span class="amount text-green">₱<?= number_format((float)$empBenefits['cutoff_total'], 2) ?></span>
+      </div>
+    <?php endif; ?>
   </div>
 
   <!-- ── Net Pay ────────────────────────────────────────────────────────── -->

@@ -127,3 +127,19 @@ HR SIDE
 
 
 TESTING RANI SIYA SA CD NATU PARA ATU MA KITA JUD KONG NI GANA
+
+
+
+
+for TDD demo vendor/bin/phpunit tests/Unit/Domain/Payroll
+
+From your project root, run:
+powershell
+vendor/bin/phpunit tests/Unit/Domain/Payroll
+This runs the payroll TDD tests specifically.
+Expected result:
+text
+OK (64 tests, 90 assertions)
+To run all PHPUnit tests in the project, use:
+powershell
+vendor/bin/phpunit

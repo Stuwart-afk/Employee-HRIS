@@ -7,53 +7,56 @@ require_once __DIR__ . '/../authentication/guard.php';
 require_once __DIR__ . '/../config/database.php';
 
 try {
-    $pdo->exec("SET time_zone = '+08:00'");
-} catch (Throwable $e) {}
+  $pdo->exec("SET time_zone = '+08:00'");
+} catch (Throwable $e) {
+}
 
 $realtimeHelper = __DIR__ . '/../includes/realtime_push.php';
 if (is_file($realtimeHelper)) {
-    require_once $realtimeHelper;
+  require_once $realtimeHelper;
 }
 
 $hrActorName = trim((string)($_SESSION['full_name'] ?? $_SESSION['username'] ?? 'HR'));
 if ($hrActorName === '') {
-    $hrActorName = 'HR';
+  $hrActorName = 'HR';
 }
 
 function hris_table_exists(PDO $pdo, string $table): bool
 {
-    try {
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
-            return false;
-        }
-        $stmt = $pdo->prepare("SHOW TABLES LIKE :t");
-        $stmt->execute([':t' => $table]);
-        return (bool)$stmt->fetchColumn();
-    } catch (Throwable $e) {
-        return false;
+  try {
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
+      return false;
     }
+    $stmt = $pdo->prepare("SHOW TABLES LIKE :t");
+    $stmt->execute([':t' => $table]);
+    return (bool)$stmt->fetchColumn();
+  } catch (Throwable $e) {
+    return false;
+  }
 }
 
 function hris_table_columns(PDO $pdo, string $table): array
 {
-    try {
-        if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
-            return [];
-        }
-        $stmt = $pdo->query("SHOW COLUMNS FROM `{$table}`");
-        $cols = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $cols[strtolower((string)$row['Field'])] = (string)$row['Field'];
-        }
-        return $cols;
-    } catch (Throwable $e) {
-        return [];
+  try {
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
+      return [];
     }
+    $stmt = $pdo->query("SHOW COLUMNS FROM `{$table}`");
+    $cols = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+      $cols[strtolower((string)$row['Field'])] = (string)$row['Field'];
+    }
+    return $cols;
+  } catch (Throwable $e) {
+    return [];
+  }
 }
+
 
 function hris_ensure_onboarding_schema(PDO $pdo): void
 {
-    $pdo->exec("
+  // Create the table if it does not exist.
+  $pdo->exec("
         CREATE TABLE IF NOT EXISTS `employee_onboarding` (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
             `employee_id` INT UNSIGNED NULL,
@@ -77,156 +80,199 @@ function hris_ensure_onboarding_schema(PDO $pdo): void
             `policy_acknowledged_at` DATETIME NULL,
             `orientation_email_sent_at` DATETIME NULL,
             `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
             UNIQUE KEY `uq_onb_emp_code` (`employee_code`),
             KEY `idx_onb_email` (`email`),
             KEY `idx_onb_facilitator_emp` (`facilitator_employee_id`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ) ENGINE=InnoDB
+        DEFAULT CHARSET=utf8mb4
+        COLLATE=utf8mb4_unicode_ci
     ");
 
-    $columnsToAdd = [
-        'facilitator_employee_id'   => "ALTER TABLE `employee_onboarding` ADD COLUMN `facilitator_employee_id` INT UNSIGNED NULL AFTER `orientation_room`",
-        'orientation_attended_at'   => "ALTER TABLE `employee_onboarding` ADD COLUMN `orientation_attended_at` DATETIME NULL AFTER `buddy_name`",
-        'checked_in_by'             => "ALTER TABLE `employee_onboarding` ADD COLUMN `checked_in_by` VARCHAR(160) NULL AFTER `orientation_attended_at`",
-        'policy_acknowledged_at'    => "ALTER TABLE `employee_onboarding` ADD COLUMN `policy_acknowledged_at` DATETIME NULL AFTER `checked_in_by`",
-        'orientation_email_sent_at' => "ALTER TABLE `employee_onboarding` ADD COLUMN `orientation_email_sent_at` DATETIME NULL AFTER `policy_acknowledged_at`",
-    ];
+  // Required columns for older versions of the table.
+  $columnsToAdd = [
+    'employee_id' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `employee_id` INT UNSIGNED NULL
+        ",
 
-    foreach ($columnsToAdd as $col => $sql) {
-        $chk = $pdo->prepare("
-            SELECT COUNT(*)
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'employee_onboarding'
-              AND COLUMN_NAME = ?
-        ");
-        $chk->execute([$col]);
-        if ((int)$chk->fetchColumn() === 0) {
-            $pdo->exec($sql);
-        }
+    'facilitator_employee_id' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `facilitator_employee_id` INT UNSIGNED NULL
+        ",
+
+    'facilitator_name' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `facilitator_name` VARCHAR(160) NULL
+        ",
+
+    'buddy_name' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `buddy_name` VARCHAR(160) NULL
+        ",
+
+    'orientation_attended_at' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `orientation_attended_at` DATETIME NULL
+        ",
+
+    'checked_in_by' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `checked_in_by` VARCHAR(160) NULL
+        ",
+
+    'policy_acknowledged_at' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `policy_acknowledged_at` DATETIME NULL
+        ",
+
+    'orientation_email_sent_at' => "
+            ALTER TABLE `employee_onboarding`
+            ADD COLUMN `orientation_email_sent_at` DATETIME NULL
+        ",
+  ];
+
+  // Check existing columns before adding anything.
+  $chk = $pdo->prepare("
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'employee_onboarding'
+          AND COLUMN_NAME = ?
+    ");
+
+  foreach ($columnsToAdd as $column => $sql) {
+    $chk->execute([$column]);
+
+    if ((int) $chk->fetchColumn() === 0) {
+      $pdo->exec($sql);
     }
+  }
 }
+
 
 function hris_recompute_onboarding_status(PDO $pdo, int $onbId): string
 {
-    $stmt = $pdo->prepare("
+  $stmt = $pdo->prepare("
         SELECT `step_info`, `step_documents`, `step_orientation`, `step_policy`
         FROM `employee_onboarding`
         WHERE `id` = ?
         LIMIT 1
     ");
-    $stmt->execute([$onbId]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$row) {
-        return 'In Progress';
-    }
+  $stmt->execute([$onbId]);
+  $row = $stmt->fetch(PDO::FETCH_ASSOC);
+  if (!$row) {
+    return 'In Progress';
+  }
 
-    $stepsDone = (int)($row['step_info'] ?? 0)
-        + (int)($row['step_documents'] ?? 0)
-        + (int)($row['step_orientation'] ?? 0)
-        + (int)($row['step_policy'] ?? 0);
+  $stepsDone = (int)($row['step_info'] ?? 0)
+    + (int)($row['step_documents'] ?? 0)
+    + (int)($row['step_orientation'] ?? 0)
+    + (int)($row['step_policy'] ?? 0);
 
-    $nextStatus = $stepsDone >= 4 ? 'Completed' : 'In Progress';
-    $pdo->prepare("UPDATE `employee_onboarding` SET `status` = ? WHERE `id` = ?")
-        ->execute([$nextStatus, $onbId]);
+  $nextStatus = $stepsDone >= 4 ? 'Completed' : 'In Progress';
+  $pdo->prepare("UPDATE `employee_onboarding` SET `status` = ? WHERE `id` = ?")
+    ->execute([$nextStatus, $onbId]);
 
-    return $nextStatus;
+  return $nextStatus;
 }
 
 function hris_resolve_onboarding_email(PDO $pdo, array $rec): string
 {
-    $email = trim((string)($rec['email'] ?? ''));
-    if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        return $email;
-    }
-
-    try {
-        $empCols = hris_table_columns($pdo, 'employees');
-        if (!isset($empCols['email'])) {
-            return $email;
-        }
-        if (!empty($rec['employee_id']) && isset($empCols['id'])) {
-            $stmt = $pdo->prepare("SELECT `email` FROM `employees` WHERE `id` = ? LIMIT 1");
-            $stmt->execute([(int)$rec['employee_id']]);
-            $found = trim((string)($stmt->fetchColumn() ?: ''));
-            if (filter_var($found, FILTER_VALIDATE_EMAIL)) {
-                return $found;
-            }
-        }
-        if (!empty($rec['employee_code']) && isset($empCols['employee_id'])) {
-            $stmt = $pdo->prepare("SELECT `email` FROM `employees` WHERE `employee_id` = ? LIMIT 1");
-            $stmt->execute([(string)$rec['employee_code']]);
-            $found = trim((string)($stmt->fetchColumn() ?: ''));
-            if (filter_var($found, FILTER_VALIDATE_EMAIL)) {
-                return $found;
-            }
-        }
-    } catch (Throwable $e) {}
-
+  $email = trim((string)($rec['email'] ?? ''));
+  if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
     return $email;
+  }
+
+  try {
+    $empCols = hris_table_columns($pdo, 'employees');
+    if (!isset($empCols['email'])) {
+      return $email;
+    }
+    if (!empty($rec['employee_id']) && isset($empCols['id'])) {
+      $stmt = $pdo->prepare("SELECT `email` FROM `employees` WHERE `id` = ? LIMIT 1");
+      $stmt->execute([(int)$rec['employee_id']]);
+      $found = trim((string)($stmt->fetchColumn() ?: ''));
+      if (filter_var($found, FILTER_VALIDATE_EMAIL)) {
+        return $found;
+      }
+    }
+    if (!empty($rec['employee_code']) && isset($empCols['employee_id'])) {
+      $stmt = $pdo->prepare("SELECT `email` FROM `employees` WHERE `employee_id` = ? LIMIT 1");
+      $stmt->execute([(string)$rec['employee_code']]);
+      $found = trim((string)($stmt->fetchColumn() ?: ''));
+      if (filter_var($found, FILTER_VALIDATE_EMAIL)) {
+        return $found;
+      }
+    }
+  } catch (Throwable $e) {
+  }
+
+  return $email;
 }
 
 function hris_build_employee_select_sql(PDO $pdo, string $whereSql = '', string $orderSql = 'ORDER BY `e`.`id` ASC'): string
 {
-    $empCols = hris_table_columns($pdo, 'employees');
-    $pkCol = isset($empCols['id']) ? '`e`.`id`' : 'NULL';
-    $codeCol = isset($empCols['employee_id']) ? "COALESCE(`e`.`employee_id`, '')" : "''";
-    $emailCol = isset($empCols['email']) ? "COALESCE(`e`.`email`, '')" : "''";
+  $empCols = hris_table_columns($pdo, 'employees');
+  $pkCol = isset($empCols['id']) ? '`e`.`id`' : 'NULL';
+  $codeCol = isset($empCols['employee_id']) ? "COALESCE(`e`.`employee_id`, '')" : "''";
+  $emailCol = isset($empCols['email']) ? "COALESCE(`e`.`email`, '')" : "''";
 
-    $deptJoin = '';
-    if (isset($empCols['department']) && isset($empCols['department_id']) && hris_table_exists($pdo, 'departments')) {
-        $deptCols = hris_table_columns($pdo, 'departments');
-        $dNameCol = $deptCols['name'] ?? ($deptCols['department_name'] ?? ($deptCols['title'] ?? null));
-        if ($dNameCol !== null) {
-            $deptJoin = "LEFT JOIN `departments` `d` ON `d`.`id` = `e`.`department_id`";
-            $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), NULLIF(TRIM(`d`.`{$dNameCol}`), ''), 'General')";
-        } else {
-            $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), 'General')";
-        }
-    } elseif (isset($empCols['department_id']) && hris_table_exists($pdo, 'departments')) {
-        $deptCols = hris_table_columns($pdo, 'departments');
-        $dNameCol = $deptCols['name'] ?? ($deptCols['department_name'] ?? ($deptCols['title'] ?? null));
-        if ($dNameCol !== null) {
-            $deptJoin = "LEFT JOIN `departments` `d` ON `d`.`id` = `e`.`department_id`";
-            $deptExpr = "COALESCE(NULLIF(TRIM(`d`.`{$dNameCol}`), ''), 'General')";
-        } else {
-            $deptExpr = "COALESCE(CAST(`e`.`department_id` AS CHAR), 'General')";
-        }
-    } elseif (isset($empCols['department'])) {
-        $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), 'General')";
+  $deptJoin = '';
+  if (isset($empCols['department']) && isset($empCols['department_id']) && hris_table_exists($pdo, 'departments')) {
+    $deptCols = hris_table_columns($pdo, 'departments');
+    $dNameCol = $deptCols['name'] ?? ($deptCols['department_name'] ?? ($deptCols['title'] ?? null));
+    if ($dNameCol !== null) {
+      $deptJoin = "LEFT JOIN `departments` `d` ON `d`.`id` = `e`.`department_id`";
+      $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), NULLIF(TRIM(`d`.`{$dNameCol}`), ''), 'General')";
     } else {
-        $deptExpr = "'General'";
+      $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), 'General')";
     }
-
-    $posJoin = '';
-    if (isset($empCols['job_title']) && isset($empCols['position_id']) && hris_table_exists($pdo, 'positions')) {
-        $posCols = hris_table_columns($pdo, 'positions');
-        $pTitleCol = $posCols['title'] ?? ($posCols['name'] ?? ($posCols['position_name'] ?? null));
-        if ($pTitleCol !== null) {
-            $posJoin = "LEFT JOIN `positions` `p` ON `p`.`id` = `e`.`position_id`";
-            $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), NULLIF(TRIM(`p`.`{$pTitleCol}`), ''), 'New Hire')";
-        } else {
-            $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), 'New Hire')";
-        }
-    } elseif (isset($empCols['position_id']) && hris_table_exists($pdo, 'positions')) {
-        $posCols = hris_table_columns($pdo, 'positions');
-        $pTitleCol = $posCols['title'] ?? ($posCols['name'] ?? ($posCols['position_name'] ?? null));
-        if ($pTitleCol !== null) {
-            $posJoin = "LEFT JOIN `positions` `p` ON `p`.`id` = `e`.`position_id`";
-            $jobExpr = "COALESCE(NULLIF(TRIM(`p`.`{$pTitleCol}`), ''), 'New Hire')";
-        } else {
-            $jobExpr = "COALESCE(CAST(`e`.`position_id` AS CHAR), 'New Hire')";
-        }
-    } elseif (isset($empCols['job_title'])) {
-        $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), 'New Hire')";
-    } elseif (isset($empCols['position'])) {
-        $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`position`), ''), 'New Hire')";
+  } elseif (isset($empCols['department_id']) && hris_table_exists($pdo, 'departments')) {
+    $deptCols = hris_table_columns($pdo, 'departments');
+    $dNameCol = $deptCols['name'] ?? ($deptCols['department_name'] ?? ($deptCols['title'] ?? null));
+    if ($dNameCol !== null) {
+      $deptJoin = "LEFT JOIN `departments` `d` ON `d`.`id` = `e`.`department_id`";
+      $deptExpr = "COALESCE(NULLIF(TRIM(`d`.`{$dNameCol}`), ''), 'General')";
     } else {
-        $jobExpr = "'New Hire'";
+      $deptExpr = "COALESCE(CAST(`e`.`department_id` AS CHAR), 'General')";
     }
+  } elseif (isset($empCols['department'])) {
+    $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), 'General')";
+  } else {
+    $deptExpr = "'General'";
+  }
 
-    return "
+  $posJoin = '';
+  if (isset($empCols['job_title']) && isset($empCols['position_id']) && hris_table_exists($pdo, 'positions')) {
+    $posCols = hris_table_columns($pdo, 'positions');
+    $pTitleCol = $posCols['title'] ?? ($posCols['name'] ?? ($posCols['position_name'] ?? null));
+    if ($pTitleCol !== null) {
+      $posJoin = "LEFT JOIN `positions` `p` ON `p`.`id` = `e`.`position_id`";
+      $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), NULLIF(TRIM(`p`.`{$pTitleCol}`), ''), 'New Hire')";
+    } else {
+      $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), 'New Hire')";
+    }
+  } elseif (isset($empCols['position_id']) && hris_table_exists($pdo, 'positions')) {
+    $posCols = hris_table_columns($pdo, 'positions');
+    $pTitleCol = $posCols['title'] ?? ($posCols['name'] ?? ($posCols['position_name'] ?? null));
+    if ($pTitleCol !== null) {
+      $posJoin = "LEFT JOIN `positions` `p` ON `p`.`id` = `e`.`position_id`";
+      $jobExpr = "COALESCE(NULLIF(TRIM(`p`.`{$pTitleCol}`), ''), 'New Hire')";
+    } else {
+      $jobExpr = "COALESCE(CAST(`e`.`position_id` AS CHAR), 'New Hire')";
+    }
+  } elseif (isset($empCols['job_title'])) {
+    $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), 'New Hire')";
+  } elseif (isset($empCols['position'])) {
+    $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`position`), ''), 'New Hire')";
+  } else {
+    $jobExpr = "'New Hire'";
+  }
+
+  return "
         SELECT
             {$pkCol} AS `id`,
             {$codeCol} AS `employee_code`,
@@ -244,118 +290,118 @@ function hris_build_employee_select_sql(PDO $pdo, string $whereSql = '', string 
 
 function hris_sync_and_fetch_onboarding(PDO $pdo): array
 {
-    hris_ensure_onboarding_schema($pdo);
+  hris_ensure_onboarding_schema($pdo);
 
-    try {
-        $sql = hris_build_employee_select_sql($pdo, '', 'ORDER BY `e`.`id` ASC');
-        $empStmt = $pdo->query($sql);
-        $employees = $empStmt ? $empStmt->fetchAll(PDO::FETCH_ASSOC) : [];
+  try {
+    $sql = hris_build_employee_select_sql($pdo, '', 'ORDER BY `e`.`id` ASC');
+    $empStmt = $pdo->query($sql);
+    $employees = $empStmt ? $empStmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
-        $insStmt = $pdo->prepare("
+    $insStmt = $pdo->prepare("
             INSERT IGNORE INTO `employee_onboarding`
                 (`employee_id`, `employee_code`, `full_name`, `email`, `department`, `job_title`, `status`, `step_info`)
             VALUES
                 (?, ?, ?, ?, ?, ?, 'In Progress', 1)
         ");
 
-        foreach ($employees as $idx => $emp) {
-            $code = trim((string)($emp['employee_code'] ?? ''));
-            if ($code === '') {
-                $code = 'EMP-OB-' . str_pad((string)((int)($emp['id'] ?? ($idx + 1))), 3, '0', STR_PAD_LEFT);
-            }
-            $fullName = trim((string)($emp['full_name'] ?? ''));
-            if ($fullName === '') {
-                $fullName = 'Employee #' . (int)($emp['id'] ?? ($idx + 1));
-            }
-            $insStmt->execute([
-                !empty($emp['id']) ? (int)$emp['id'] : null,
-                $code,
-                $fullName,
-                trim((string)($emp['email'] ?? '')),
-                trim((string)($emp['department'] ?? 'General')) ?: 'General',
-                trim((string)($emp['job_title'] ?? 'New Hire')) ?: 'New Hire',
-            ]);
-        }
-    } catch (Throwable $e) {
-        error_log('Onboarding employee sync error: ' . $e->getMessage());
+    foreach ($employees as $idx => $emp) {
+      $code = trim((string)($emp['employee_code'] ?? ''));
+      if ($code === '') {
+        $code = 'EMP-OB-' . str_pad((string)((int)($emp['id'] ?? ($idx + 1))), 3, '0', STR_PAD_LEFT);
+      }
+      $fullName = trim((string)($emp['full_name'] ?? ''));
+      if ($fullName === '') {
+        $fullName = 'Employee #' . (int)($emp['id'] ?? ($idx + 1));
+      }
+      $insStmt->execute([
+        !empty($emp['id']) ? (int)$emp['id'] : null,
+        $code,
+        $fullName,
+        trim((string)($emp['email'] ?? '')),
+        trim((string)($emp['department'] ?? 'General')) ?: 'General',
+        trim((string)($emp['job_title'] ?? 'New Hire')) ?: 'New Hire',
+      ]);
     }
+  } catch (Throwable $e) {
+    error_log('Onboarding employee sync error: ' . $e->getMessage());
+  }
 
-    $rows = $pdo->query("SELECT * FROM `employee_onboarding` ORDER BY `id` ASC")->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) {
-        if (trim((string)($r['email'] ?? '')) === '') {
-            $resolved = hris_resolve_onboarding_email($pdo, $r);
-            if ($resolved !== '') {
-                $r['email'] = $resolved;
-            }
-        }
-        $steps = (int)($r['step_info'] ?? 0)
-            + (int)($r['step_documents'] ?? 0)
-            + (int)($r['step_orientation'] ?? 0)
-            + (int)($r['step_policy'] ?? 0);
-        $r['completed_steps'] = $steps;
-        $computedStatus = $steps >= 4 ? 'Completed' : 'In Progress';
-        if (($r['status'] ?? '') !== $computedStatus) {
-            $pdo->prepare("UPDATE `employee_onboarding` SET `status` = ? WHERE `id` = ?")
-                ->execute([$computedStatus, (int)$r['id']]);
-            $r['status'] = $computedStatus;
-        }
+  $rows = $pdo->query("SELECT * FROM `employee_onboarding` ORDER BY `id` ASC")->fetchAll(PDO::FETCH_ASSOC);
+  foreach ($rows as &$r) {
+    if (trim((string)($r['email'] ?? '')) === '') {
+      $resolved = hris_resolve_onboarding_email($pdo, $r);
+      if ($resolved !== '') {
+        $r['email'] = $resolved;
+      }
     }
-    unset($r);
+    $steps = (int)($r['step_info'] ?? 0)
+      + (int)($r['step_documents'] ?? 0)
+      + (int)($r['step_orientation'] ?? 0)
+      + (int)($r['step_policy'] ?? 0);
+    $r['completed_steps'] = $steps;
+    $computedStatus = $steps >= 4 ? 'Completed' : 'In Progress';
+    if (($r['status'] ?? '') !== $computedStatus) {
+      $pdo->prepare("UPDATE `employee_onboarding` SET `status` = ? WHERE `id` = ?")
+        ->execute([$computedStatus, (int)$r['id']]);
+      $r['status'] = $computedStatus;
+    }
+  }
+  unset($r);
 
-    return $rows;
+  return $rows;
 }
 
 function hris_fetch_staff_options(PDO $pdo): array
 {
-    try {
-        $empCols = hris_table_columns($pdo, 'employees');
-        if (empty($empCols) || !isset($empCols['rank'])) {
-            return [];
-        }
+  try {
+    $empCols = hris_table_columns($pdo, 'employees');
+    if (empty($empCols) || !isset($empCols['rank'])) {
+      return [];
+    }
 
-        $pkCol = isset($empCols['id']) ? '`e`.`id`' : 'NULL';
-        $emailCol = isset($empCols['email']) ? "COALESCE(`e`.`email`, '')" : "''";
+    $pkCol = isset($empCols['id']) ? '`e`.`id`' : 'NULL';
+    $emailCol = isset($empCols['email']) ? "COALESCE(`e`.`email`, '')" : "''";
 
-        $deptJoin = '';
-        if (isset($empCols['department_id']) && hris_table_exists($pdo, 'departments')) {
-            $deptCols = hris_table_columns($pdo, 'departments');
-            $dNameCol = $deptCols['name'] ?? ($deptCols['department_name'] ?? ($deptCols['title'] ?? null));
-            if ($dNameCol !== null) {
-                $deptJoin = "LEFT JOIN `departments` `d` ON `d`.`id` = `e`.`department_id`";
-                $deptExpr = "COALESCE(NULLIF(TRIM(`d`.`{$dNameCol}`), ''), '')";
-            } else {
-                $deptExpr = "''";
-            }
-        } elseif (isset($empCols['department'])) {
-            $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), '')";
-        } else {
-            $deptExpr = "''";
-        }
+    $deptJoin = '';
+    if (isset($empCols['department_id']) && hris_table_exists($pdo, 'departments')) {
+      $deptCols = hris_table_columns($pdo, 'departments');
+      $dNameCol = $deptCols['name'] ?? ($deptCols['department_name'] ?? ($deptCols['title'] ?? null));
+      if ($dNameCol !== null) {
+        $deptJoin = "LEFT JOIN `departments` `d` ON `d`.`id` = `e`.`department_id`";
+        $deptExpr = "COALESCE(NULLIF(TRIM(`d`.`{$dNameCol}`), ''), '')";
+      } else {
+        $deptExpr = "''";
+      }
+    } elseif (isset($empCols['department'])) {
+      $deptExpr = "COALESCE(NULLIF(TRIM(`e`.`department`), ''), '')";
+    } else {
+      $deptExpr = "''";
+    }
 
-        $posJoin = '';
-        if (isset($empCols['position_id']) && hris_table_exists($pdo, 'positions')) {
-            $posCols = hris_table_columns($pdo, 'positions');
-            $pTitleCol = $posCols['title'] ?? ($posCols['name'] ?? ($posCols['position_name'] ?? null));
-            if ($pTitleCol !== null) {
-                $posJoin = "LEFT JOIN `positions` `p` ON `p`.`id` = `e`.`position_id`";
-                $jobExpr = "COALESCE(NULLIF(TRIM(`p`.`{$pTitleCol}`), ''), '')";
-            } else {
-                $jobExpr = "''";
-            }
-        } elseif (isset($empCols['job_title'])) {
-            $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), '')";
-        } else {
-            $jobExpr = "''";
-        }
+    $posJoin = '';
+    if (isset($empCols['position_id']) && hris_table_exists($pdo, 'positions')) {
+      $posCols = hris_table_columns($pdo, 'positions');
+      $pTitleCol = $posCols['title'] ?? ($posCols['name'] ?? ($posCols['position_name'] ?? null));
+      if ($pTitleCol !== null) {
+        $posJoin = "LEFT JOIN `positions` `p` ON `p`.`id` = `e`.`position_id`";
+        $jobExpr = "COALESCE(NULLIF(TRIM(`p`.`{$pTitleCol}`), ''), '')";
+      } else {
+        $jobExpr = "''";
+      }
+    } elseif (isset($empCols['job_title'])) {
+      $jobExpr = "COALESCE(NULLIF(TRIM(`e`.`job_title`), ''), '')";
+    } else {
+      $jobExpr = "''";
+    }
 
-        $whereParts = [
-            "REPLACE(REPLACE(LOWER(TRIM(`e`.`rank`)), '-', '_'), ' ', '_') = 'team_leader'"
-        ];
-        if (isset($empCols['employment_status'])) {
-            $whereParts[] = "(LOWER(TRIM(`e`.`employment_status`)) IN ('active', '') OR `e`.`employment_status` IS NULL)";
-        }
+    $whereParts = [
+      "REPLACE(REPLACE(LOWER(TRIM(`e`.`rank`)), '-', '_'), ' ', '_') = 'team_leader'"
+    ];
+    if (isset($empCols['employment_status'])) {
+      $whereParts[] = "(LOWER(TRIM(`e`.`employment_status`)) IN ('active', '') OR `e`.`employment_status` IS NULL)";
+    }
 
-        $sql = "
+    $sql = "
             SELECT DISTINCT
                 {$pkCol} AS `id`,
                 TRIM(CONCAT_WS(' ', NULLIF(TRIM(COALESCE(`e`.`first_name`, '')), ''), NULLIF(TRIM(COALESCE(`e`.`middle_name`, '')), ''), NULLIF(TRIM(COALESCE(`e`.`last_name`, '')), ''))) AS `full_name`,
@@ -370,56 +416,56 @@ function hris_fetch_staff_options(PDO $pdo): array
             ORDER BY `full_name` ASC
         ";
 
-        $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        return array_values(array_filter($rows, fn($x) => trim((string)($x['full_name'] ?? '')) !== ''));
-    } catch (Throwable $e) {
-        error_log('hris_fetch_staff_options error: ' . $e->getMessage());
-        return [];
-    }
+    $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    return array_values(array_filter($rows, fn($x) => trim((string)($x['full_name'] ?? '')) !== ''));
+  } catch (Throwable $e) {
+    error_log('hris_fetch_staff_options error: ' . $e->getMessage());
+    return [];
+  }
 }
 
 function hris_build_orientation_email(array $rec, array $sched, string $hrActorName): array
 {
-    $companyName = trim((string)(getenv('COMPANY_NAME') ?: ($_SESSION['company_name'] ?? 'HRIS Human Resources')));
-    $empName     = trim((string)($rec['full_name'] ?? 'New Hire'));
-    $empCode     = trim((string)($rec['employee_code'] ?? ''));
-    $department  = trim((string)($rec['department'] ?? 'General'));
-    $jobTitle    = trim((string)($rec['job_title'] ?? 'New Hire'));
-    $dtRaw       = trim((string)($sched['orientation_at'] ?? ''));
-    $room        = trim((string)($sched['orientation_room'] ?? 'To be announced'));
-    $facilitator = trim((string)($sched['facilitator_name'] ?? 'Unassigned'));
-    $buddy       = trim((string)($sched['buddy_name'] ?? ''));
+  $companyName = trim((string)(getenv('COMPANY_NAME') ?: ($_SESSION['company_name'] ?? 'HRIS Human Resources')));
+  $empName     = trim((string)($rec['full_name'] ?? 'New Hire'));
+  $empCode     = trim((string)($rec['employee_code'] ?? ''));
+  $department  = trim((string)($rec['department'] ?? 'General'));
+  $jobTitle    = trim((string)($rec['job_title'] ?? 'New Hire'));
+  $dtRaw       = trim((string)($sched['orientation_at'] ?? ''));
+  $room        = trim((string)($sched['orientation_room'] ?? 'To be announced'));
+  $facilitator = trim((string)($sched['facilitator_name'] ?? 'Unassigned'));
+  $buddy       = trim((string)($sched['buddy_name'] ?? ''));
 
-    $ts = $dtRaw !== '' ? strtotime($dtRaw) : false;
-    $formattedDate = $ts ? date('l, F j, Y', $ts) : ($dtRaw !== '' ? $dtRaw : 'To Be Determined');
-    $formattedTime = $ts ? date('g:i A', $ts) . ' (PHT)' : 'To Be Determined';
+  $ts = $dtRaw !== '' ? strtotime($dtRaw) : false;
+  $formattedDate = $ts ? date('l, F j, Y', $ts) : ($dtRaw !== '' ? $dtRaw : 'To Be Determined');
+  $formattedTime = $ts ? date('g:i A', $ts) . ' (PHT)' : 'To Be Determined';
 
-    $subject = "Company Orientation Schedule: {$empName} ({$department})";
+  $subject = "Company Orientation Schedule: {$empName} ({$department})";
 
-    $buddyPlain = $buddy !== '' ? "Team Buddy:      {$buddy}\n" : '';
-    $plainBody = "Dear {$empName},\n\n"
-        . "Welcome to {$companyName}! Below is your schedule for Step 3: Company Orientation (HR / Facilitator Check-In).\n\n"
-        . "COMPANY ORIENTATION DETAILS\n"
-        . "----------------------------------------\n"
-        . "Employee:        {$empName}" . ($empCode !== '' ? " ({$empCode})" : '') . "\n"
-        . "Role / Dept:     {$jobTitle} • {$department}\n"
-        . "Date:            {$formattedDate}\n"
-        . "Time:            {$formattedTime}\n"
-        . "Room / Venue:    {$room}\n"
-        . "HR / Facilitator:{$facilitator}\n"
-        . $buddyPlain
-        . "----------------------------------------\n\n"
-        . "Please arrive a few minutes early so our HR / Facilitator team can verify your attendance at check-in.\n\n"
-        . "Best regards,\n"
-        . "{$hrActorName}\n"
-        . "Human Resources Department • {$companyName}";
+  $buddyPlain = $buddy !== '' ? "Team Buddy:      {$buddy}\n" : '';
+  $plainBody = "Dear {$empName},\n\n"
+    . "Welcome to {$companyName}! Below is your schedule for Step 3: Company Orientation (HR / Facilitator Check-In).\n\n"
+    . "COMPANY ORIENTATION DETAILS\n"
+    . "----------------------------------------\n"
+    . "Employee:        {$empName}" . ($empCode !== '' ? " ({$empCode})" : '') . "\n"
+    . "Role / Dept:     {$jobTitle} • {$department}\n"
+    . "Date:            {$formattedDate}\n"
+    . "Time:            {$formattedTime}\n"
+    . "Room / Venue:    {$room}\n"
+    . "HR / Facilitator:{$facilitator}\n"
+    . $buddyPlain
+    . "----------------------------------------\n\n"
+    . "Please arrive a few minutes early so our HR / Facilitator team can verify your attendance at check-in.\n\n"
+    . "Best regards,\n"
+    . "{$hrActorName}\n"
+    . "Human Resources Department • {$companyName}";
 
-    $esc = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
-    $buddyRow = $buddy !== ''
-        ? '<tr><td style="padding:6px 10px;font-size:13px;color:#64748b;font-weight:600;">Team Buddy</td><td style="padding:6px 10px;font-size:13.5px;color:#0f172a;">' . $esc($buddy) . '</td></tr>'
-        : '';
+  $esc = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+  $buddyRow = $buddy !== ''
+    ? '<tr><td style="padding:6px 10px;font-size:13px;color:#64748b;font-weight:600;">Team Buddy</td><td style="padding:6px 10px;font-size:13.5px;color:#0f172a;">' . $esc($buddy) . '</td></tr>'
+    : '';
 
-    $htmlBody = '<!DOCTYPE html>
+  $htmlBody = '<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>' . $esc($subject) . '</title></head>
 <body style="margin:0;padding:24px;background-color:#f1f5f9;font-family:\'Segoe UI\',Arial,sans-serif;color:#1e293b;">
@@ -480,82 +526,82 @@ function hris_build_orientation_email(array $rec, array $sched, string $hrActorN
 </body>
 </html>';
 
-    return [
-        'subject'    => $subject,
-        'html_body'  => $htmlBody,
-        'plain_body' => $plainBody,
-    ];
+  return [
+    'subject'    => $subject,
+    'html_body'  => $htmlBody,
+    'plain_body' => $plainBody,
+  ];
 }
 
 function hris_send_orientation_email(string $toEmail, string $subject, string $htmlBody, string $plainBody): array
 {
-    $toEmail = trim($toEmail);
-    if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
-        return ['sent' => false, 'error' => 'Invalid or missing employee email address.'];
+  $toEmail = trim($toEmail);
+  if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+    return ['sent' => false, 'error' => 'Invalid or missing employee email address.'];
+  }
+
+  $mailerFile = __DIR__ . '/../classes/Mailer.php';
+  if (!is_file($mailerFile)) {
+    return ['sent' => false, 'error' => 'classes/Mailer.php not found.'];
+  }
+
+  try {
+    require_once $mailerFile;
+    if (!class_exists('Mailer')) {
+      return ['sent' => false, 'error' => 'Mailer class not found.'];
     }
 
-    $mailerFile = __DIR__ . '/../classes/Mailer.php';
-    if (!is_file($mailerFile)) {
-        return ['sent' => false, 'error' => 'classes/Mailer.php not found.'];
-    }
-
-    try {
-        require_once $mailerFile;
-        if (!class_exists('Mailer')) {
-            return ['sent' => false, 'error' => 'Mailer class not found.'];
-        }
-
-        $mailer = new Mailer();
-        $sent = $mailer->send($toEmail, $subject, $htmlBody, $plainBody);
-        return $sent
-            ? ['sent' => true, 'error' => '']
-            : ['sent' => false, 'error' => 'Mailer::send() returned false. Check your PHP error log.'];
-    } catch (Throwable $e) {
-        error_log('HRIS orientation email failed: ' . $e->getMessage());
-        return ['sent' => false, 'error' => $e->getMessage()];
-    }
+    $mailer = new Mailer();
+    $sent = $mailer->send($toEmail, $subject, $htmlBody, $plainBody);
+    return $sent
+      ? ['sent' => true, 'error' => '']
+      : ['sent' => false, 'error' => 'Mailer::send() returned false. Check your PHP error log.'];
+  } catch (Throwable $e) {
+    error_log('HRIS orientation email failed: ' . $e->getMessage());
+    return ['sent' => false, 'error' => $e->getMessage()];
+  }
 }
 
 function hris_build_hr_onboarding_payload(PDO $pdo, string $hrActorName): array
 {
-    $records = hris_sync_and_fetch_onboarding($pdo);
-    $staff   = hris_fetch_staff_options($pdo);
+  $records = hris_sync_and_fetch_onboarding($pdo);
+  $staff   = hris_fetch_staff_options($pdo);
 
-    $facilitators = [];
-    $inProgressCount = 0;
-    $completedCount  = 0;
+  $facilitators = [];
+  $inProgressCount = 0;
+  $completedCount  = 0;
 
-    foreach ($records as $rec) {
-        $fac = trim((string)($rec['facilitator_name'] ?? ''));
-        if ($fac !== '' && !in_array($fac, $facilitators, true)) {
-            $facilitators[] = $fac;
-        }
-        if (($rec['status'] ?? '') === 'Completed') {
-            $completedCount++;
-        } else {
-            $inProgressCount++;
-        }
+  foreach ($records as $rec) {
+    $fac = trim((string)($rec['facilitator_name'] ?? ''));
+    if ($fac !== '' && !in_array($fac, $facilitators, true)) {
+      $facilitators[] = $fac;
     }
-    sort($facilitators, SORT_NATURAL | SORT_FLAG_CASE);
+    if (($rec['status'] ?? '') === 'Completed') {
+      $completedCount++;
+    } else {
+      $inProgressCount++;
+    }
+  }
+  sort($facilitators, SORT_NATURAL | SORT_FLAG_CASE);
 
-    return [
-        'ok'              => true,
-        'signature'       => md5(json_encode($records, JSON_UNESCAPED_UNICODE)),
-        'serverTime'      => date('h:i:s A'),
-        'hrActorName'     => $hrActorName,
-        'records'         => $records,
-        'staff'           => $staff,
-        'facilitators'    => $facilitators,
-        'inProgressCount' => $inProgressCount,
-        'completedCount'  => $completedCount,
-    ];
+  return [
+    'ok'              => true,
+    'signature'       => md5(json_encode($records, JSON_UNESCAPED_UNICODE)),
+    'serverTime'      => date('h:i:s A'),
+    'hrActorName'     => $hrActorName,
+    'records'         => $records,
+    'staff'           => $staff,
+    'facilitators'    => $facilitators,
+    'inProgressCount' => $inProgressCount,
+    'completedCount'  => $completedCount,
+  ];
 }
 
 if (isset($_GET['api']) && $_GET['api'] === 'live_state') {
-    header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-    echo json_encode(hris_build_hr_onboarding_payload($pdo, $hrActorName), JSON_UNESCAPED_UNICODE);
-    exit;
+  header('Content-Type: application/json; charset=utf-8');
+  header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+  echo json_encode(hris_build_hr_onboarding_payload($pdo, $hrActorName), JSON_UNESCAPED_UNICODE);
+  exit;
 }
 
 $initialPayload = hris_build_hr_onboarding_payload($pdo, $hrActorName);
@@ -563,102 +609,102 @@ $flashMsg = '';
 $flashErr = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $isAjax = !empty($_POST['ajax']) || (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest');
-    $action = (string)($_POST['onb_action'] ?? '');
-    $targetId = (int)($_POST['onb_id'] ?? 0);
+  $isAjax = !empty($_POST['ajax']) || (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest');
+  $action = (string)($_POST['onb_action'] ?? '');
+  $targetId = (int)($_POST['onb_id'] ?? 0);
 
-    if ($targetId > 0) {
-        if ($action === 'toggle_step') {
-            $stepCol = (string)($_POST['step_col'] ?? '');
-            $allowedCols = ['step_info', 'step_documents', 'step_orientation', 'step_policy'];
-            if (in_array($stepCol, $allowedCols, true)) {
-                $curStmt = $pdo->prepare("SELECT `$stepCol` FROM `employee_onboarding` WHERE `id` = ? LIMIT 1");
-                $curStmt->execute([$targetId]);
-                $curVal = (int)$curStmt->fetchColumn();
-                $nextVal = $curVal === 1 ? 0 : 1;
+  if ($targetId > 0) {
+    if ($action === 'toggle_step') {
+      $stepCol = (string)($_POST['step_col'] ?? '');
+      $allowedCols = ['step_info', 'step_documents', 'step_orientation', 'step_policy'];
+      if (in_array($stepCol, $allowedCols, true)) {
+        $curStmt = $pdo->prepare("SELECT `$stepCol` FROM `employee_onboarding` WHERE `id` = ? LIMIT 1");
+        $curStmt->execute([$targetId]);
+        $curVal = (int)$curStmt->fetchColumn();
+        $nextVal = $curVal === 1 ? 0 : 1;
 
-                if ($stepCol === 'step_orientation') {
-                    if ($nextVal === 1) {
-                        $pdo->prepare("
+        if ($stepCol === 'step_orientation') {
+          if ($nextVal === 1) {
+            $pdo->prepare("
                             UPDATE `employee_onboarding`
                             SET `step_orientation` = 1,
                                 `orientation_attended_at` = NOW(),
                                 `checked_in_by` = ?
                             WHERE `id` = ?
                         ")->execute([$hrActorName, $targetId]);
-                        $flashMsg = 'Orientation marked as Attended / Present.';
-                    } else {
-                        $pdo->prepare("
+            $flashMsg = 'Orientation marked as Attended / Present.';
+          } else {
+            $pdo->prepare("
                             UPDATE `employee_onboarding`
                             SET `step_orientation` = 0,
                                 `orientation_attended_at` = NULL,
                                 `checked_in_by` = NULL
                             WHERE `id` = ?
                         ")->execute([$targetId]);
-                        $flashMsg = 'Orientation check-in reset to Pending.';
-                    }
-                } elseif ($stepCol === 'step_policy') {
-                    $pdo->prepare("
+            $flashMsg = 'Orientation check-in reset to Pending.';
+          }
+        } elseif ($stepCol === 'step_policy') {
+          $pdo->prepare("
                         UPDATE `employee_onboarding`
                         SET `step_policy` = ?,
                             `policy_acknowledged_at` = CASE WHEN ? = 1 THEN NOW() ELSE NULL END
                         WHERE `id` = ?
                     ")->execute([$nextVal, $nextVal, $targetId]);
-                    $flashMsg = 'Policy acknowledgement updated.';
-                } else {
-                    $pdo->prepare("UPDATE `employee_onboarding` SET `$stepCol` = ? WHERE `id` = ?")
-                        ->execute([$nextVal, $targetId]);
-                    $flashMsg = 'Onboarding step updated.';
-                }
+          $flashMsg = 'Policy acknowledgement updated.';
+        } else {
+          $pdo->prepare("UPDATE `employee_onboarding` SET `$stepCol` = ? WHERE `id` = ?")
+            ->execute([$nextVal, $targetId]);
+          $flashMsg = 'Onboarding step updated.';
+        }
 
-                $newStatus = hris_recompute_onboarding_status($pdo, $targetId);
-                if ($newStatus === 'Completed') {
-                    $flashMsg .= ' All 4 steps complete — moved to Completed.';
-                }
+        $newStatus = hris_recompute_onboarding_status($pdo, $targetId);
+        if ($newStatus === 'Completed') {
+          $flashMsg .= ' All 4 steps complete — moved to Completed.';
+        }
 
-                if (function_exists('hris_broadcast_onboarding_event')) {
-                    hris_broadcast_onboarding_event('onboarding_updated', [
-                        'onb_id' => $targetId,
-                        'step'   => $stepCol,
-                        'value'  => $nextVal,
-                        'status' => $newStatus,
-                    ]);
-                }
-            }
-        } elseif ($action === 'save_schedule') {
-            $schedRaw  = trim((string)($_POST['orientation_at'] ?? ''));
-            $room      = trim((string)($_POST['orientation_room'] ?? ''));
-            $facEmpId  = (int)($_POST['facilitator_employee_id'] ?? 0);
-            $facName   = trim((string)($_POST['facilitator_name'] ?? ''));
-            $buddy     = trim((string)($_POST['buddy_name'] ?? ''));
-            $empEmail  = trim((string)($_POST['employee_email'] ?? ''));
-            $sendEmail = ((string)($_POST['send_email'] ?? '1')) === '1';
+        if (function_exists('hris_broadcast_onboarding_event')) {
+          hris_broadcast_onboarding_event('onboarding_updated', [
+            'onb_id' => $targetId,
+            'step'   => $stepCol,
+            'value'  => $nextVal,
+            'status' => $newStatus,
+          ]);
+        }
+      }
+    } elseif ($action === 'save_schedule') {
+      $schedRaw  = trim((string)($_POST['orientation_at'] ?? ''));
+      $room      = trim((string)($_POST['orientation_room'] ?? ''));
+      $facEmpId  = (int)($_POST['facilitator_employee_id'] ?? 0);
+      $facName   = trim((string)($_POST['facilitator_name'] ?? ''));
+      $buddy     = trim((string)($_POST['buddy_name'] ?? ''));
+      $empEmail  = trim((string)($_POST['employee_email'] ?? ''));
+      $sendEmail = ((string)($_POST['send_email'] ?? '1')) === '1';
 
-            if ($facEmpId > 0 && $facName === '') {
-                foreach ($initialPayload['staff'] as $st) {
-                    if ((int)$st['id'] === $facEmpId) {
-                        $facName = (string)$st['full_name'];
-                        break;
-                    }
-                }
-            }
+      if ($facEmpId > 0 && $facName === '') {
+        foreach ($initialPayload['staff'] as $st) {
+          if ((int)$st['id'] === $facEmpId) {
+            $facName = (string)$st['full_name'];
+            break;
+          }
+        }
+      }
 
-            $schedSql = null;
-            if ($schedRaw !== '') {
-                $normalized = str_replace('T', ' ', $schedRaw);
-                if (strlen($normalized) === 16) {
-                    $normalized .= ':00';
-                }
-                $schedSql = $normalized;
-            }
+      $schedSql = null;
+      if ($schedRaw !== '') {
+        $normalized = str_replace('T', ' ', $schedRaw);
+        if (strlen($normalized) === 16) {
+          $normalized .= ':00';
+        }
+        $schedSql = $normalized;
+      }
 
-            $recStmt = $pdo->prepare("SELECT * FROM `employee_onboarding` WHERE `id` = ? LIMIT 1");
-            $recStmt->execute([$targetId]);
-            $curRec = $recStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+      $recStmt = $pdo->prepare("SELECT * FROM `employee_onboarding` WHERE `id` = ? LIMIT 1");
+      $recStmt->execute([$targetId]);
+      $curRec = $recStmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            $finalEmail = $empEmail !== '' ? $empEmail : hris_resolve_onboarding_email($pdo, $curRec);
+      $finalEmail = $empEmail !== '' ? $empEmail : hris_resolve_onboarding_email($pdo, $curRec);
 
-            $pdo->prepare("
+      $pdo->prepare("
                 UPDATE `employee_onboarding`
                 SET `email` = CASE WHEN ? <> '' THEN ? ELSE `email` END,
                     `orientation_at` = ?,
@@ -668,99 +714,99 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     `buddy_name` = ?
                 WHERE `id` = ?
             ")->execute([
-                $finalEmail,
-                $finalEmail,
-                $schedSql,
-                $room !== '' ? $room : null,
-                $facEmpId > 0 ? $facEmpId : null,
-                $facName !== '' ? $facName : null,
-                $buddy !== '' ? $buddy : null,
-                $targetId,
-            ]);
+        $finalEmail,
+        $finalEmail,
+        $schedSql,
+        $room !== '' ? $room : null,
+        $facEmpId > 0 ? $facEmpId : null,
+        $facName !== '' ? $facName : null,
+        $buddy !== '' ? $buddy : null,
+        $targetId,
+      ]);
 
-            hris_recompute_onboarding_status($pdo, $targetId);
+      hris_recompute_onboarding_status($pdo, $targetId);
 
-            if ($sendEmail) {
-                $mergedRec = array_merge($curRec, ['email' => $finalEmail]);
-                $tpl = hris_build_orientation_email($mergedRec, [
-                    'orientation_at'   => $schedSql ?? '',
-                    'orientation_room' => $room,
-                    'facilitator_name' => $facName,
-                    'buddy_name'       => $buddy,
-                ], $hrActorName);
+      if ($sendEmail) {
+        $mergedRec = array_merge($curRec, ['email' => $finalEmail]);
+        $tpl = hris_build_orientation_email($mergedRec, [
+          'orientation_at'   => $schedSql ?? '',
+          'orientation_room' => $room,
+          'facilitator_name' => $facName,
+          'buddy_name'       => $buddy,
+        ], $hrActorName);
 
-                $mailRes = hris_send_orientation_email($finalEmail, $tpl['subject'], $tpl['html_body'], $tpl['plain_body']);
-                if ($mailRes['sent']) {
-                    $pdo->prepare("UPDATE `employee_onboarding` SET `orientation_email_sent_at` = NOW() WHERE `id` = ?")
-                        ->execute([$targetId]);
-                    $flashMsg = "Orientation schedule saved and invitation sent to {$finalEmail}.";
-                } else {
-                    $flashErr = "Orientation schedule saved (Email notice: {$mailRes['error']})";
-                }
-            } else {
-                $flashMsg = 'Orientation schedule & facilitator assignment saved.';
-            }
+        $mailRes = hris_send_orientation_email($finalEmail, $tpl['subject'], $tpl['html_body'], $tpl['plain_body']);
+        if ($mailRes['sent']) {
+          $pdo->prepare("UPDATE `employee_onboarding` SET `orientation_email_sent_at` = NOW() WHERE `id` = ?")
+            ->execute([$targetId]);
+          $flashMsg = "Orientation schedule saved and invitation sent to {$finalEmail}.";
+        } else {
+          $flashErr = "Orientation schedule saved (Email notice: {$mailRes['error']})";
+        }
+      } else {
+        $flashMsg = 'Orientation schedule & facilitator assignment saved.';
+      }
 
-            if (function_exists('hris_broadcast_onboarding_event')) {
-                hris_broadcast_onboarding_event('onboarding_updated', [
-                    'onb_id' => $targetId,
-                    'action' => 'save_schedule',
-                ]);
-            }
-        } elseif ($action === 'door_mark_present') {
-            $pdo->prepare("
+      if (function_exists('hris_broadcast_onboarding_event')) {
+        hris_broadcast_onboarding_event('onboarding_updated', [
+          'onb_id' => $targetId,
+          'action' => 'save_schedule',
+        ]);
+      }
+    } elseif ($action === 'door_mark_present') {
+      $pdo->prepare("
                 UPDATE `employee_onboarding`
                 SET `step_orientation` = 1,
                     `orientation_attended_at` = NOW(),
                     `checked_in_by` = ?
                 WHERE `id` = ?
             ")->execute([$hrActorName, $targetId]);
-            $newStatus = hris_recompute_onboarding_status($pdo, $targetId);
-            $flashMsg = $newStatus === 'Completed'
-                ? 'Marked Present — all 4 steps complete, moved to Completed!'
-                : 'New employee marked Present / Checked In at orientation door.';
+      $newStatus = hris_recompute_onboarding_status($pdo, $targetId);
+      $flashMsg = $newStatus === 'Completed'
+        ? 'Marked Present — all 4 steps complete, moved to Completed!'
+        : 'New employee marked Present / Checked In at orientation door.';
 
-            if (function_exists('hris_broadcast_onboarding_event')) {
-                hris_broadcast_onboarding_event('onboarding_updated', [
-                    'onb_id' => $targetId,
-                    'action' => 'door_mark_present',
-                    'status' => $newStatus,
-                ]);
-            }
-        } elseif ($action === 'door_undo_present') {
-            $pdo->prepare("
+      if (function_exists('hris_broadcast_onboarding_event')) {
+        hris_broadcast_onboarding_event('onboarding_updated', [
+          'onb_id' => $targetId,
+          'action' => 'door_mark_present',
+          'status' => $newStatus,
+        ]);
+      }
+    } elseif ($action === 'door_undo_present') {
+      $pdo->prepare("
                 UPDATE `employee_onboarding`
                 SET `step_orientation` = 0,
                     `orientation_attended_at` = NULL,
                     `checked_in_by` = NULL
                 WHERE `id` = ?
             ")->execute([$targetId]);
-            hris_recompute_onboarding_status($pdo, $targetId);
-            $flashMsg = 'Door check-in reverted to Pending (In Progress).';
+      hris_recompute_onboarding_status($pdo, $targetId);
+      $flashMsg = 'Door check-in reverted to Pending (In Progress).';
 
-            if (function_exists('hris_broadcast_onboarding_event')) {
-                hris_broadcast_onboarding_event('onboarding_updated', [
-                    'onb_id' => $targetId,
-                    'action' => 'door_undo_present',
-                    'status' => 'In Progress',
-                ]);
-            }
-        }
+      if (function_exists('hris_broadcast_onboarding_event')) {
+        hris_broadcast_onboarding_event('onboarding_updated', [
+          'onb_id' => $targetId,
+          'action' => 'door_undo_present',
+          'status' => 'In Progress',
+        ]);
+      }
     }
+  }
 
-    $nextPayload = hris_build_hr_onboarding_payload($pdo, $hrActorName);
-    if ($isAjax) {
-        header('Content-Type: application/json; charset=utf-8');
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        echo json_encode([
-            'ok'      => $flashErr === '',
-            'message' => $flashErr !== '' ? $flashErr : $flashMsg,
-            'state'   => $nextPayload,
-        ], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+  $nextPayload = hris_build_hr_onboarding_payload($pdo, $hrActorName);
+  if ($isAjax) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    echo json_encode([
+      'ok'      => $flashErr === '',
+      'message' => $flashErr !== '' ? $flashErr : $flashMsg,
+      'state'   => $nextPayload,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+  }
 
-    $initialPayload = $nextPayload;
+  $initialPayload = $nextPayload;
 }
 
 $pageTitle = 'Onboarding';
@@ -768,142 +814,457 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 ?>
 
 <style>
-  .hr-onb-wrap { max-width: 1360px; margin: 22px auto 48px; padding: 0 20px; color: #e2e8f0; }
-  .hr-onb-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
-  .hr-onb-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .hr-onb-wrap {
+    max-width: 1360px;
+    margin: 22px auto 48px;
+    padding: 0 20px;
+    color: #e2e8f0;
+  }
+
+  .hr-onb-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .hr-onb-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+
   .hr-sync-pill {
-    display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 999px;
-    background: rgba(16, 185, 129, 0.16); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.35);
-    font-size: 12px; font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.16);
+    color: #6ee7b7;
+    border: 1px solid rgba(52, 211, 153, 0.35);
+    font-size: 12px;
+    font-weight: 700;
   }
+
   .hr-sync-dot {
-    width: 8px; height: 8px; border-radius: 50%; background: #34d399;
-    box-shadow: 0 0 8px #34d399; animation: hrPulse 1.6s infinite;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 8px #34d399;
+    animation: hrPulse 1.6s infinite;
   }
+
   @keyframes hrPulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.45; transform: scale(0.85); }
+
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    50% {
+      opacity: 0.45;
+      transform: scale(0.85);
+    }
   }
+
   .hr-back-btn {
-    padding: 8px 14px; border-radius: 10px; background: #1e293b; color: #f8fafc;
-    text-decoration: none; font-size: 13px; font-weight: 600; border: 1px solid rgba(148, 163, 184, 0.25);
+    padding: 8px 14px;
+    border-radius: 10px;
+    background: #1e293b;
+    color: #f8fafc;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid rgba(148, 163, 184, 0.25);
   }
-  .hr-onb-main-grid { display: grid; grid-template-columns: 440px 1fr; gap: 18px; align-items: start; margin-bottom: 20px; }
-  @media (max-width: 1080px) { .hr-onb-main-grid { grid-template-columns: 1fr; } }
+
+  .hr-onb-main-grid {
+    display: grid;
+    grid-template-columns: 440px 1fr;
+    gap: 18px;
+    align-items: start;
+    margin-bottom: 20px;
+  }
+
+  @media (max-width: 1080px) {
+    .hr-onb-main-grid {
+      grid-template-columns: 1fr;
+    }
+  }
 
   .hr-queue-card {
-    background: #111827; border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 16px; padding: 16px;
+    background: #111827;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 16px;
+    padding: 16px;
   }
-  .hr-queue-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+
+  .hr-queue-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 10px 0;
+  }
+
   .hr-qtab {
-    padding: 5px 10px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, 0.25);
-    background: #0b1120; color: #cbd5e1; font-size: 11.5px; font-weight: 700; cursor: pointer;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: #0b1120;
+    color: #cbd5e1;
+    font-size: 11.5px;
+    font-weight: 700;
+    cursor: pointer;
   }
-  .hr-qtab.is-active { background: #2563eb; border-color: #2563eb; color: #ffffff; }
-  .hr-qtab.is-done.is-active { background: #16a34a; border-color: #16a34a; color: #ffffff; }
-  .hr-qtab.is-prog.is-active { background: #1d4ed8; border-color: #3b82f6; color: #ffffff; }
+
+  .hr-qtab.is-active {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+  }
+
+  .hr-qtab.is-done.is-active {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #ffffff;
+  }
+
+  .hr-qtab.is-prog.is-active {
+    background: #1d4ed8;
+    border-color: #3b82f6;
+    color: #ffffff;
+  }
 
   .hr-queue-toolbar {
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px;
-    margin-bottom: 8px; font-size: 12px; color: #94a3b8;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: #94a3b8;
   }
+
   .hr-qtable-wrap {
-    max-height: 360px; overflow: auto; border: 1px solid rgba(148, 163, 184, 0.16);
+    max-height: 360px;
+    overflow: auto;
+    border: 1px solid rgba(148, 163, 184, 0.16);
     border-radius: 10px;
   }
-  .hr-qtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  .hr-qtable th {
-    position: sticky; top: 0; z-index: 1; text-align: left; padding: 9px 10px;
-    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8;
-    background: #0b1120; border-bottom: 1px solid rgba(148, 163, 184, 0.22); cursor: pointer; user-select: none;
+
+  .hr-qtable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
   }
-  .hr-qtable th:hover { color: #ffffff; background: #131d33; }
-  .hr-qtable td { padding: 9px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); color: #e2e8f0; }
-  .hr-qtable tbody tr { cursor: pointer; transition: background 0.12s ease; }
-  .hr-qtable tbody tr:hover td { background: rgba(30, 41, 59, 0.7); }
+
+  .hr-qtable th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    text-align: left;
+    padding: 9px 10px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    background: #0b1120;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .hr-qtable th:hover {
+    color: #ffffff;
+    background: #131d33;
+  }
+
+  .hr-qtable td {
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    color: #e2e8f0;
+  }
+
+  .hr-qtable tbody tr {
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+
+  .hr-qtable tbody tr:hover td {
+    background: rgba(30, 41, 59, 0.7);
+  }
+
   .hr-qtable tbody tr.is-selected td {
-    background: rgba(37, 99, 235, 0.24); border-top: 1px solid #3b82f6; border-bottom: 1px solid #3b82f6;
+    background: rgba(37, 99, 235, 0.24);
+    border-top: 1px solid #3b82f6;
+    border-bottom: 1px solid #3b82f6;
   }
 
   .hr-detail-card {
-    background: #111827; border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 16px; padding: 22px 24px;
+    background: #111827;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 16px;
+    padding: 22px 24px;
   }
+
   .hr-step-box {
-    background: #161f33; border: 1px solid rgba(148, 163, 184, 0.15);
-    border-radius: 12px; padding: 15px 17px; margin-top: 12px;
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px;
+    background: #161f33;
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 12px;
+    padding: 15px 17px;
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
   }
-  .hr-badge-prog { background: rgba(59, 130, 246, 0.22); color: #93c5fd; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-  .hr-badge-done { background: rgba(16, 185, 129, 0.22); color: #6ee7b7; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-  .hr-badge-pend { background: rgba(245, 158, 11, 0.22); color: #fcd34d; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+
+  .hr-badge-prog {
+    background: rgba(59, 130, 246, 0.22);
+    color: #93c5fd;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .hr-badge-done {
+    background: rgba(16, 185, 129, 0.22);
+    color: #6ee7b7;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .hr-badge-pend {
+    background: rgba(245, 158, 11, 0.22);
+    color: #fcd34d;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
 
   .hr-btn {
-    padding: 7px 13px; border-radius: 8px; border: 1px solid rgba(148, 163, 184, 0.3);
-    background: #1e293b; color: #f8fafc; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    padding: 7px 13px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: #1e293b;
+    color: #f8fafc;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
   }
-  .hr-btn:hover { background: #334155; }
-  .hr-btn-primary { background: #2563eb; border-color: #2563eb; color: #ffffff; }
-  .hr-btn-primary:hover { background: #1d4ed8; }
-  .hr-btn-success { background: #16a34a; border-color: #16a34a; color: #ffffff; }
-  .hr-btn-success:hover { background: #15803d; }
+
+  .hr-btn:hover {
+    background: #334155;
+  }
+
+  .hr-btn-primary {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+  }
+
+  .hr-btn-primary:hover {
+    background: #1d4ed8;
+  }
+
+  .hr-btn-success {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #ffffff;
+  }
+
+  .hr-btn-success:hover {
+    background: #15803d;
+  }
 
   .hr-sched-drawer {
-    background: #0b1120; border: 1px solid rgba(59, 130, 246, 0.4);
-    border-radius: 12px; padding: 16px; margin-top: 12px; display: none;
+    background: #0b1120;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 12px;
+    display: none;
   }
-  .hr-sched-drawer.is-open { display: block; }
-  .hr-sched-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 12px; }
-  @media (max-width: 720px) { .hr-sched-grid { grid-template-columns: 1fr; } }
+
+  .hr-sched-drawer.is-open {
+    display: block;
+  }
+
+  .hr-sched-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  @media (max-width: 720px) {
+    .hr-sched-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .hr-input {
-    width: 100%; box-sizing: border-box; padding: 8px 11px; border-radius: 8px;
-    border: 1px solid rgba(148, 163, 184, 0.35); background: #0b1120; color: #f8fafc; font-size: 13px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 11px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: #0b1120;
+    color: #f8fafc;
+    font-size: 13px;
   }
-  .hr-input::placeholder { color: #94a3b8; }
+
+  .hr-input::placeholder {
+    color: #94a3b8;
+  }
 
   .hr-roster-card {
-    background: #111827; border: 1px solid rgba(148, 163, 184, 0.18);
-    border-radius: 16px; padding: 22px 24px;
+    background: #111827;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 16px;
+    padding: 22px 24px;
   }
+
   .hr-roster-top {
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 14px;
   }
-  .hr-roster-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+  .hr-roster-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
   .hr-dt-bar {
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
-    background: #0b1120; border: 1px solid rgba(148, 163, 184, 0.16);
-    border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-size: 12.5px; color: #cbd5e1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    background: #0b1120;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    font-size: 12.5px;
+    color: #cbd5e1;
   }
+
   .hr-dt-select {
-    padding: 6px 10px; border-radius: 7px; border: 1px solid rgba(148, 163, 184, 0.35);
-    background: #111827; color: #f8fafc; font-size: 12.5px; font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: #111827;
+    color: #f8fafc;
+    font-size: 12.5px;
+    font-weight: 600;
   }
-  .hr-table-wrap { overflow-x: auto; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 12px; }
-  .hr-dt { width: 100%; border-collapse: collapse; font-size: 13px; color: #f8fafc; }
+
+  .hr-table-wrap {
+    overflow-x: auto;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 12px;
+  }
+
+  .hr-dt {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    color: #f8fafc;
+  }
+
   .hr-dt th {
-    text-align: left; padding: 11px 12px; font-size: 11px; text-transform: uppercase;
-    letter-spacing: 0.04em; color: #94a3b8; background: #0b1120;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.2); white-space: nowrap;
+    text-align: left;
+    padding: 11px 12px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #94a3b8;
+    background: #0b1120;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    white-space: nowrap;
   }
-  .hr-dt th.hr-sort { cursor: pointer; user-select: none; }
-  .hr-dt th.hr-sort:hover { color: #ffffff; background: #131d33; }
+
+  .hr-dt th.hr-sort {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .hr-dt th.hr-sort:hover {
+    color: #ffffff;
+    background: #131d33;
+  }
+
   .hr-dt td {
-    padding: 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-    color: #e2e8f0; vertical-align: middle;
+    padding: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    color: #e2e8f0;
+    vertical-align: middle;
   }
-  .hr-dt tbody tr:hover td { background: rgba(30, 41, 59, 0.55); }
+
+  .hr-dt tbody tr:hover td {
+    background: rgba(30, 41, 59, 0.55);
+  }
+
   .hr-dt-foot {
-    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
-    gap: 10px; margin-top: 12px; font-size: 12.5px; color: #94a3b8;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    font-size: 12.5px;
+    color: #94a3b8;
   }
-  .hr-pages { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .hr-pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
   .hr-page-btn {
-    padding: 5px 10px; border-radius: 7px; border: 1px solid rgba(148, 163, 184, 0.3);
-    background: #161f33; color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 5px 10px;
+    border-radius: 7px;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: #161f33;
+    color: #e2e8f0;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
   }
-  .hr-page-btn.is-active { background: #2563eb; border-color: #2563eb; color: #ffffff; }
-  .hr-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .hr-page-btn.is-active {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+  }
+
+  .hr-page-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
 </style>
 
 <div class="hr-onb-wrap">
@@ -951,8 +1312,7 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
         id="hrQueueSearchInput"
         class="hr-input"
         style="margin-top:10px;"
-        placeholder="Search name, ID, or department / role..."
-      >
+        placeholder="Search name, ID, or department / role...">
 
       <div class="hr-queue-tabs" role="tablist" aria-label="Filter onboarding queue by status">
         <button type="button" class="hr-qtab is-prog is-active" data-qstatus="In Progress">In Progress (<span id="hrQTabProg"><?= (int)$initialPayload['inProgressCount'] ?></span>)</button>
@@ -1014,8 +1374,7 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
           id="hrRosterSearchInput"
           class="hr-input"
           style="width:auto; min-width:250px;"
-          placeholder="Search Employee Name or ID (e.g. EMP-005)..."
-        >
+          placeholder="Search Employee Name or ID (e.g. EMP-005)...">
       </div>
     </div>
 
@@ -1059,7 +1418,7 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 </div>
 
 <script>
-  (function () {
+  (function() {
     let hrState = <?= json_encode($initialPayload, JSON_UNESCAPED_UNICODE) ?>;
 
     let queueSearchQuery = '';
@@ -1070,9 +1429,9 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 
     const initialRecords = Array.isArray(hrState.records) ? hrState.records : [];
     const firstInProgress = initialRecords.find(r => String(r.status || 'In Progress') !== 'Completed');
-    let selectedId = firstInProgress
-      ? Number(firstInProgress.id)
-      : (initialRecords.length ? Number(initialRecords[0].id) : 0);
+    let selectedId = firstInProgress ?
+      Number(firstInProgress.id) :
+      (initialRecords.length ? Number(initialRecords[0].id) : 0);
     let scheduleDrawerOpen = false;
 
     let rosterSortCol = 'id';
@@ -1090,9 +1449,9 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
     function showBanner(ok, msg) {
       const host = document.getElementById('hrOnbBanner');
       if (!host || !msg) return;
-      host.innerHTML = ok
-        ? `<div style="background:rgba(16,185,129,0.16); border:1px solid rgba(52,211,153,0.45); color:#6ee7b7; padding:11px 15px; border-radius:10px; margin-bottom:14px; font-size:13px; font-weight:600;">${esc(msg)}</div>`
-        : `<div style="background:rgba(239,68,68,0.16); border:1px solid rgba(248,113,113,0.45); color:#fca5a5; padding:11px 15px; border-radius:10px; margin-bottom:14px; font-size:13px; font-weight:600;">${esc(msg)}</div>`;
+      host.innerHTML = ok ?
+        `<div style="background:rgba(16,185,129,0.16); border:1px solid rgba(52,211,153,0.45); color:#6ee7b7; padding:11px 15px; border-radius:10px; margin-bottom:14px; font-size:13px; font-weight:600;">${esc(msg)}</div>` :
+        `<div style="background:rgba(239,68,68,0.16); border:1px solid rgba(248,113,113,0.45); color:#fca5a5; padding:11px 15px; border-radius:10px; margin-bottom:14px; font-size:13px; font-weight:600;">${esc(msg)}</div>`;
     }
 
     async function postHrAction(formData) {
@@ -1110,7 +1469,9 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
         }
         try {
           if ('BroadcastChannel' in window) {
-            new BroadcastChannel('hris_realtime_sync').postMessage({ type: 'onboarding_updated' });
+            new BroadcastChannel('hris_realtime_sync').postMessage({
+              type: 'onboarding_updated'
+            });
           }
         } catch (_) {}
       } catch (_) {
@@ -1119,7 +1480,7 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
     }
 
     const queueSearchInput = document.getElementById('hrQueueSearchInput');
-    const queuePageSizeEl  = document.getElementById('hrQueuePageSize');
+    const queuePageSizeEl = document.getElementById('hrQueuePageSize');
 
     if (queueSearchInput) {
       queueSearchInput.addEventListener('input', () => {
@@ -1148,10 +1509,14 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 
     function getQueueSortVal(rec, col) {
       switch (col) {
-        case 'full_name': return String(rec.full_name || '').toLowerCase();
-        case 'department_role': return `${rec.department || ''} ${rec.job_title || ''}`.toLowerCase();
-        case 'status': return String(rec.status || 'In Progress').toLowerCase();
-        default: return Number(rec.id || 0);
+        case 'full_name':
+          return String(rec.full_name || '').toLowerCase();
+        case 'department_role':
+          return `${rec.department || ''} ${rec.job_title || ''}`.toLowerCase();
+        case 'status':
+          return String(rec.status || 'In Progress').toLowerCase();
+        default:
+          return Number(rec.id || 0);
       }
     }
 
@@ -1190,7 +1555,10 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
       const progCount = list.filter(r => String(r.status || 'In Progress') !== 'Completed').length;
       const doneCount = list.filter(r => String(r.status || '') === 'Completed').length;
 
-      const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = String(val); };
+      const setText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = String(val);
+      };
       setText('hrQueueTotalCount', list.length);
       setText('hrQueueProgCount', progCount);
       setText('hrQueueDoneCount', doneCount);
@@ -1211,7 +1579,10 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
       filtered.sort((a, b) => {
         const va = getQueueSortVal(a, queueSortCol);
         const vb = getQueueSortVal(b, queueSortCol);
-        const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
+        const cmp = String(va).localeCompare(String(vb), undefined, {
+          numeric: true,
+          sensitivity: 'base'
+        });
         return queueSortDir === 'asc' ? cmp : -cmp;
       });
 
@@ -1228,9 +1599,9 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
       const tbody = document.getElementById('hrQueueTableBody');
       if (tbody) {
         if (!rows.length) {
-          const emptyMsg = queueStatusFilter === 'In Progress' && !queueSearchQuery
-            ? 'All employees have completed onboarding! Click "Completed" or "All" above to view them.'
-            : 'No matching employees in queue.';
+          const emptyMsg = queueStatusFilter === 'In Progress' && !queueSearchQuery ?
+            'All employees have completed onboarding! Click "Completed" or "All" above to view them.' :
+            'No matching employees in queue.';
           tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#94a3b8; padding:18px;">${emptyMsg}</td></tr>`;
         } else {
           tbody.innerHTML = rows.map(rec => {
@@ -1309,25 +1680,25 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
         selectedId = Number(rec.id);
       }
 
-      const stepsDone = Number(rec.step_info || 0)
-        + Number(rec.step_documents || 0)
-        + Number(rec.step_orientation || 0)
-        + Number(rec.step_policy || 0);
+      const stepsDone = Number(rec.step_info || 0) +
+        Number(rec.step_documents || 0) +
+        Number(rec.step_orientation || 0) +
+        Number(rec.step_policy || 0);
       const isCompleted = stepsDone >= 4;
       const infoDone = Number(rec.step_info || 0) === 1;
       const docsDone = Number(rec.step_documents || 0) === 1;
-      const oriDone  = Number(rec.step_orientation || 0) === 1;
-      const polDone  = Number(rec.step_policy || 0) === 1;
+      const oriDone = Number(rec.step_orientation || 0) === 1;
+      const polDone = Number(rec.step_policy || 0) === 1;
 
       const staffList = Array.isArray(hrState.staff) ? hrState.staff : [];
-      const staffOptionsHtml = staffList.length
-        ? staffList.map(st => {
-            const stId = Number(st.id);
-            const sel = Number(rec.facilitator_employee_id || 0) === stId ? 'selected' : '';
-            const meta = [st.job_title, st.department].filter(Boolean).join(' • ');
-            return `<option value="${stId}" data-name="${esc(st.full_name)}" ${sel}>${esc(st.full_name)}${meta ? ` (${esc(meta)})` : ''}</option>`;
-          }).join('')
-        : `<option value="" disabled>No active Team Leaders found (rank = team_leader)</option>`;
+      const staffOptionsHtml = staffList.length ?
+        staffList.map(st => {
+          const stId = Number(st.id);
+          const sel = Number(rec.facilitator_employee_id || 0) === stId ? 'selected' : '';
+          const meta = [st.job_title, st.department].filter(Boolean).join(' • ');
+          return `<option value="${stId}" data-name="${esc(st.full_name)}" ${sel}>${esc(st.full_name)}${meta ? ` (${esc(meta)})` : ''}</option>`;
+        }).join('') :
+        `<option value="" disabled>No active Team Leaders found (rank = team_leader)</option>`;
 
       panel.innerHTML = `
         <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:14px;">
@@ -1508,10 +1879,10 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
       });
     }
 
-    const facFilterEl  = document.getElementById('hrRosterFacilitatorFilter');
-    const attFilterEl  = document.getElementById('hrRosterAttendanceFilter');
-    const rosSearchEl  = document.getElementById('hrRosterSearchInput');
-    const rosSizeEl    = document.getElementById('hrRosterPageSize');
+    const facFilterEl = document.getElementById('hrRosterFacilitatorFilter');
+    const attFilterEl = document.getElementById('hrRosterAttendanceFilter');
+    const rosSearchEl = document.getElementById('hrRosterSearchInput');
+    const rosSizeEl = document.getElementById('hrRosterPageSize');
 
     function syncFacilitatorDropdown() {
       if (!facFilterEl) return;
@@ -1525,14 +1896,22 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 
     function getRosterSortVal(rec, col) {
       switch (col) {
-        case 'employee_code': return String(rec.employee_code || '').toLowerCase();
-        case 'full_name': return String(rec.full_name || '').toLowerCase();
-        case 'department_role': return `${rec.department || ''} ${rec.job_title || ''}`.toLowerCase();
-        case 'orientation_at': return String(rec.orientation_at || '9999-12-31 23:59:59').toLowerCase();
-        case 'orientation_room': return String(rec.orientation_room || 'zzz').toLowerCase();
-        case 'facilitator_name': return String(rec.facilitator_name || 'zzz').toLowerCase();
-        case 'step_orientation': return Number(rec.step_orientation || 0);
-        default: return Number(rec.id || 0);
+        case 'employee_code':
+          return String(rec.employee_code || '').toLowerCase();
+        case 'full_name':
+          return String(rec.full_name || '').toLowerCase();
+        case 'department_role':
+          return `${rec.department || ''} ${rec.job_title || ''}`.toLowerCase();
+        case 'orientation_at':
+          return String(rec.orientation_at || '9999-12-31 23:59:59').toLowerCase();
+        case 'orientation_room':
+          return String(rec.orientation_room || 'zzz').toLowerCase();
+        case 'facilitator_name':
+          return String(rec.facilitator_name || 'zzz').toLowerCase();
+        case 'step_orientation':
+          return Number(rec.step_orientation || 0);
+        default:
+          return Number(rec.id || 0);
       }
     }
 
@@ -1599,7 +1978,10 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
       filtered.sort((a, b) => {
         const va = getRosterSortVal(a, rosterSortCol);
         const vb = getRosterSortVal(b, rosterSortCol);
-        const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
+        const cmp = String(va).localeCompare(String(vb), undefined, {
+          numeric: true,
+          sensitivity: 'base'
+        });
         return rosterSortDir === 'asc' ? cmp : -cmp;
       });
 
@@ -1668,9 +2050,9 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 
       const infoEl = document.getElementById('hrRosterDtInfo');
       if (infoEl) {
-        infoEl.textContent = totalFiltered === 0
-          ? `Showing 0 of ${list.length} entries`
-          : `Showing ${startIdx + 1} to ${Math.min(startIdx + pageSize, totalFiltered)} of ${totalFiltered} filtered (${list.length} total)`;
+        infoEl.textContent = totalFiltered === 0 ?
+          `Showing 0 of ${list.length} entries` :
+          `Showing ${startIdx + 1} to ${Math.min(startIdx + pageSize, totalFiltered)} of ${totalFiltered} filtered (${list.length} total)`;
       }
 
       const pagerEl = document.getElementById('hrRosterPagination');
@@ -1710,7 +2092,9 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
 
     async function pollHrOnboarding() {
       try {
-        const res = await fetch(`?api=live_state&_=${Date.now()}`, { cache: 'no-store' });
+        const res = await fetch(`?api=live_state&_=${Date.now()}`, {
+          cache: 'no-store'
+        });
         if (!res.ok) return;
         const next = await res.json();
         if (next && next.ok) {
@@ -1744,15 +2128,17 @@ require_once __DIR__ . '/../templates/hrTemplates/header.php';
       } catch (_) {}
     })();
 
-    setInterval(() => { if (!document.hidden) pollHrOnboarding(); }, 1500);
+    setInterval(() => {
+      if (!document.hidden) pollHrOnboarding();
+    }, 1500);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) pollHrOnboarding();
     });
   })();
 </script>
 
-    </section>
-  </main>
+</section>
+</main>
 </body>
 
 </html>

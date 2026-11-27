@@ -51,6 +51,7 @@ function benefits_ensure_schema(PDO $pdo): void {
             `employee_id` INT UNSIGNED NOT NULL,
             `benefit_plan_id` INT UNSIGNED NOT NULL,
             `custom_amount` DECIMAL(12,2) NULL DEFAULT NULL,
+            `tenure_months` INT NOT NULL DEFAULT 0,
             `effective_date` DATE NOT NULL,
             `end_date` DATE NULL DEFAULT NULL,
             `status` VARCHAR(24) NOT NULL DEFAULT 'Active',
@@ -60,6 +61,9 @@ function benefits_ensure_schema(PDO $pdo): void {
             KEY `idx_emp_ben_plan` (`benefit_plan_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ");
+    if (!ben_has_col($pdo, 'employee_benefits', 'tenure_months')) {
+        $pdo->exec("ALTER TABLE `employee_benefits` ADD COLUMN `tenure_months` INT NOT NULL DEFAULT 0 AFTER `custom_amount`");
+    }
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS `separation_settlements` (
             `id` INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -119,12 +123,193 @@ function ben_get_employee_monthly_rate(PDO $pdo, int $employeeId): float {
     return 25000.00;
 }
 
+function ben_get_base_allowance_for_employee(PDO $pdo, int $employeeId): array {
+    $monthlyAllow = 0.0;
+    $payType = 'Monthly';
+
+    foreach (['employee_salaries', 'salaries'] as $tbl) {
+        if (!ben_has_table($pdo, $tbl)) continue;
+        $empCol = ben_has_col($pdo, $tbl, 'employee_id') ? 'employee_id' : (ben_has_col($pdo, $tbl, 'emp_id') ? 'emp_id' : null);
+        if (!$empCol) continue;
+        $allowCol = ben_has_col($pdo, $tbl, 'allowance') ? 'allowance' : null;
+        $ptCol    = ben_has_col($pdo, $tbl, 'pay_type') ? 'pay_type' : null;
+        $orderCol = ben_has_col($pdo, $tbl, 'effective_date') ? "`effective_date` DESC, `id` DESC" : "`id` DESC";
+
+        $cols = [];
+        if ($allowCol) $cols[] = "`{$allowCol}` AS allow_amt";
+        if ($ptCol)    $cols[] = "`{$ptCol}` AS pay_type";
+        if (empty($cols)) continue;
+
+        $stmt = $pdo->prepare("SELECT " . implode(', ', $cols) . " FROM `{$tbl}` WHERE `{$empCol}` = ? ORDER BY {$orderCol} LIMIT 1");
+        $stmt->execute([$employeeId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row) {
+            if ($allowCol) $monthlyAllow = round((float)($row['allow_amt'] ?? 0), 2);
+            if ($ptCol && !empty($row['pay_type'])) $payType = (string)$row['pay_type'];
+            break;
+        }
+    }
+
+    $cutoffAllow = (strtolower(trim($payType)) === 'monthly') ? round($monthlyAllow / 2, 2) : $monthlyAllow;
+    return ['monthly' => $monthlyAllow, 'cutoff' => $cutoffAllow, 'pay_type' => $payType];
+}
+
+function ben_get_active_benefits_cutoff_sum(PDO $pdo, int $employeeId, string $payType = 'Monthly', ?string $refDate = null): float {
+    if ($employeeId <= 0 || !ben_has_table($pdo, 'employee_benefits') || !ben_has_table($pdo, 'benefit_plans')) {
+        return 0.0;
+    }
+    $dateCheck = ($refDate && strtotime($refDate) !== false) ? date('Y-m-d', strtotime($refDate)) : date('Y-m-d');
+    $stmt = $pdo->prepare("
+        SELECT COALESCE(SUM(COALESCE(eb.custom_amount, bp.default_amount)), 0)
+        FROM `employee_benefits` eb
+        JOIN `benefit_plans` bp ON bp.id = eb.benefit_plan_id
+        WHERE eb.employee_id = :eid
+          AND LOWER(TRIM(COALESCE(eb.status, 'Active'))) = 'active'
+          AND eb.effective_date <= :ref1
+          AND (eb.end_date IS NULL OR eb.end_date >= :ref2)
+    ");
+    $stmt->execute([':eid' => $employeeId, ':ref1' => $dateCheck, ':ref2' => $dateCheck]);
+    $monthlyTotal = round((float)($stmt->fetchColumn() ?: 0), 2);
+    return (strtolower(trim($payType)) === 'monthly') ? round($monthlyTotal / 2, 2) : $monthlyTotal;
+}
+
+/**
+ * Real-time sync: updates non-Paid payslip rows for an employee whenever a benefit is added or toggled.
+ */
+function ben_sync_employee_payslips_realtime(PDO $pdo, int $employeeId): int {
+    if ($employeeId <= 0 || !ben_has_table($pdo, 'payslips')) {
+        return 0;
+    }
+
+    $hasPeriodTbl = ben_has_table($pdo, 'payroll_periods');
+    $sql = $hasPeriodTbl
+        ? "SELECT ps.*, pp.end_date, pp.status AS period_status
+           FROM `payslips` ps
+           LEFT JOIN `payroll_periods` pp ON pp.id = ps.payroll_period_id
+           WHERE ps.employee_id = :eid
+             AND LOWER(TRIM(COALESCE(ps.status, ''))) != 'paid'
+             AND LOWER(TRIM(COALESCE(pp.status, ''))) != 'paid'"
+        : "SELECT ps.*, CURDATE() AS end_date, '' AS period_status
+           FROM `payslips` ps
+           WHERE ps.employee_id = :eid
+             AND LOWER(TRIM(COALESCE(ps.status, ''))) != 'paid'";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':eid' => $employeeId]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    if (empty($rows)) {
+        return 0;
+    }
+
+    $baseAllowInfo = ben_get_base_allowance_for_employee($pdo, $employeeId);
+    $hasBenAmtCol  = ben_has_col($pdo, 'payslips', 'benefits_amount');
+    $hasBenCol     = ben_has_col($pdo, 'payslips', 'benefits');
+    $hasGrossCol   = ben_has_col($pdo, 'payslips', 'gross_pay');
+    $hasNetCol     = ben_has_col($pdo, 'payslips', 'net_pay');
+    $hasAllowCol   = ben_has_col($pdo, 'payslips', 'allowance');
+
+    $updated = 0;
+    foreach ($rows as $ps) {
+        $psId      = (int)($ps['id'] ?? 0);
+        $payType   = (string)($ps['pay_type'] ?? $baseAllowInfo['pay_type'] ?? 'Monthly');
+        $refDate   = (string)($ps['end_date'] ?? date('Y-m-d'));
+        $benCutoff = ben_get_active_benefits_cutoff_sum($pdo, $employeeId, $payType, $refDate);
+
+        $oldAllow  = (float)($ps['allowance'] ?? 0);
+        $newAllow  = round($baseAllowInfo['cutoff'] + $benCutoff, 2);
+        $delta     = round($newAllow - $oldAllow, 2);
+
+        $setParts = [];
+        $params   = [':id' => $psId];
+
+        if ($hasAllowCol) {
+            $setParts[] = "`allowance` = :allow";
+            $params[':allow'] = $newAllow;
+        }
+        if ($hasBenAmtCol) {
+            $setParts[] = "`benefits_amount` = :ben_amt";
+            $params[':ben_amt'] = $benCutoff;
+        } elseif ($hasBenCol) {
+            $setParts[] = "`benefits` = :ben_amt";
+            $params[':ben_amt'] = $benCutoff;
+        }
+        if ($hasGrossCol && isset($ps['gross_pay'])) {
+            $newGross = round(max(0.0, (float)$ps['gross_pay'] + $delta), 2);
+            $setParts[] = "`gross_pay` = :gross";
+            $params[':gross'] = $newGross;
+        }
+        if ($hasNetCol && isset($ps['net_pay'])) {
+            $newNet = round(max(0.0, (float)$ps['net_pay'] + $delta), 2);
+            $setParts[] = "`net_pay` = :net";
+            $params[':net'] = $newNet;
+        }
+
+        if (!empty($setParts)) {
+            $upd = $pdo->prepare("UPDATE `payslips` SET " . implode(', ', $setParts) . " WHERE `id` = :id");
+            $upd->execute($params);
+            $updated++;
+        }
+    }
+
+    return $updated;
+}
+
 function ben_compute_years_of_service(string $hireDate, string $endDate): float {
     $h = strtotime($hireDate);
     $e = strtotime($endDate);
     if ($h === false || $e === false || $e <= $h) return 0.0;
     $days = ($e - $h) / 86400.0;
     return round($days / 365.25, 2);
+}
+
+function ben_compute_tenure_info(?string $hireDate, ?string $refDate = null): array {
+    if (!$hireDate || strtotime($hireDate) === false) {
+        return [
+            'months'     => 0,
+            'years'      => 0.0,
+            'label'      => '0 mos',
+            'tier'       => '6–11 mos Tenure',
+            'multiplier' => 1.00,
+        ];
+    }
+    $start = new DateTime(date('Y-m-d', strtotime($hireDate)));
+    $end   = new DateTime(($refDate && strtotime($refDate) !== false) ? date('Y-m-d', strtotime($refDate)) : 'today');
+    if ($end < $start) {
+        $end = clone $start;
+    }
+    $diff = $start->diff($end);
+    $totalMonths = max(0, ($diff->y * 12) + $diff->m + ($diff->d >= 15 ? 1 : 0));
+    $yearsExact  = round($totalMonths / 12, 2);
+
+    if ($totalMonths < 6) {
+        $tier = 'Probationary (< 6 mos)';
+        $mult = 0.50;
+    } elseif ($totalMonths < 12) {
+        $tier = '6–11 mos Tenure';
+        $mult = 1.00;
+    } elseif ($totalMonths < 36) {
+        $tier = '1–2 yrs Tenure (+10%)';
+        $mult = 1.10;
+    } elseif ($totalMonths < 60) {
+        $tier = '3–4 yrs Tenure (+25%)';
+        $mult = 1.25;
+    } else {
+        $tier = '5+ yrs Veteran (+50%)';
+        $mult = 1.50;
+    }
+
+    $parts = [];
+    if ($diff->y > 0) $parts[] = $diff->y . ' yr' . ($diff->y > 1 ? 's' : '');
+    if ($diff->m > 0) $parts[] = $diff->m . ' mo' . ($diff->m > 1 ? 's' : '');
+    if (empty($parts)) $parts[] = $diff->d . ' day' . ($diff->d !== 1 ? 's' : '');
+
+    return [
+        'months'     => $totalMonths,
+        'years'      => $yearsExact,
+        'label'      => implode(' ', $parts),
+        'tier'       => $tier,
+        'multiplier' => $mult,
+    ];
 }
 
 try {
@@ -167,17 +352,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $empId         = (int)($_POST['employee_id'] ?? 0);
             $planId        = (int)($_POST['benefit_plan_id'] ?? 0);
             $customAmtRaw  = trim((string)($_POST['custom_amount'] ?? ''));
-            $customAmount  = $customAmtRaw === '' ? null : max(0, (float)$customAmtRaw);
             $effectiveDate = trim((string)($_POST['effective_date'] ?? date('Y-m-d')));
+            $applyTenure   = !empty($_POST['apply_tenure_rule']);
             $notes         = trim((string)($_POST['notes'] ?? ''));
 
             if ($empId <= 0 || $planId <= 0) throw new RuntimeException('Please choose both an employee and a benefit plan.');
+
+            $empStmt = $pdo->prepare("SELECT date_hired FROM employees WHERE id = ? LIMIT 1");
+            $empStmt->execute([$empId]);
+            $empHireDate = (string)($empStmt->fetchColumn() ?: '');
+
+            $planStmt = $pdo->prepare("SELECT default_amount, min_tenure_months FROM benefit_plans WHERE id = ? LIMIT 1");
+            $planStmt->execute([$planId]);
+            $planRow = $planStmt->fetch(PDO::FETCH_ASSOC) ?: ['default_amount' => 0, 'min_tenure_months' => 0];
+
+            $tenureInfo = ben_compute_tenure_info($empHireDate, $effectiveDate);
+            $minReqMonths = (int)($planRow['min_tenure_months'] ?? 0);
+            if ($minReqMonths > 0 && $tenureInfo['months'] < $minReqMonths) {
+                throw new RuntimeException("Employee has {$tenureInfo['label']} tenure, which is below the plan's {$minReqMonths}-month minimum tenure.");
+            }
+
+            if ($customAmtRaw !== '') {
+                $finalAmount = max(0, (float)$customAmtRaw);
+            } else {
+                $baseAmt = (float)($planRow['default_amount'] ?? 0);
+                $finalAmount = $applyTenure ? round($baseAmt * $tenureInfo['multiplier'], 2) : $baseAmt;
+            }
+
             $stmt = $pdo->prepare("
-                INSERT INTO `employee_benefits` (`employee_id`, `benefit_plan_id`, `custom_amount`, `effective_date`, `status`, `notes`)
-                VALUES (?, ?, ?, ?, 'Active', ?)
+                INSERT INTO `employee_benefits` (`employee_id`, `benefit_plan_id`, `custom_amount`, `tenure_months`, `effective_date`, `status`, `notes`)
+                VALUES (?, ?, ?, ?, ?, 'Active', ?)
             ");
-            $stmt->execute([$empId, $planId, $customAmount, $effectiveDate, $notes !== '' ? $notes : null]);
-            $flashOk = 'Benefit assigned to employee.';
+            $stmt->execute([$empId, $planId, $finalAmount, (int)$tenureInfo['months'], $effectiveDate, $notes !== '' ? $notes : null]);
+
+            $syncedSlips = ben_sync_employee_payslips_realtime($pdo, $empId);
+            $flashOk = 'Benefit assigned & activated (₱' . number_format($finalAmount, 2) . ' • Tenure: ' . $tenureInfo['label'] . ')'
+                . ($syncedSlips > 0 ? " — synced to {$syncedSlips} payslip(s) in real time." : ' — ready for payslips.');
             $tab = 'active_benefits';
         } elseif ($form === 'toggle_benefit_status') {
             $ebId   = (int)($_POST['eb_id'] ?? 0);
@@ -185,9 +395,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!in_array($status, ['Active', 'Suspended', 'Claimed'], true)) {
                 throw new RuntimeException('Invalid benefit status.');
             }
+
+            $empLookup = $pdo->prepare("SELECT employee_id FROM `employee_benefits` WHERE `id` = ? LIMIT 1");
+            $empLookup->execute([$ebId]);
+            $targetEmpId = (int)($empLookup->fetchColumn() ?: 0);
+
             $stmt = $pdo->prepare("UPDATE `employee_benefits` SET `status` = ? WHERE `id` = ?");
             $stmt->execute([$status, $ebId]);
-            $flashOk = 'Employee benefit status updated to ' . $status . '.';
+
+            $syncedSlips = $targetEmpId > 0 ? ben_sync_employee_payslips_realtime($pdo, $targetEmpId) : 0;
+            $flashOk = 'Benefit status set to ' . $status
+                . ($syncedSlips > 0 ? " and synced to {$syncedSlips} payslip(s) in real time." : '.');
             $tab = 'active_benefits';
         } elseif ($form === 'compute_separation') {
             $empId         = (int)($_POST['employee_id'] ?? 0);
@@ -207,7 +425,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!in_array($sepType, $allowedSep, true)) $sepType = 'Resignation';
 
             $monthlyRate = ben_get_employee_monthly_rate($pdo, $empId);
-            $dailyRate   = round(($monthlyRate * 12.0) / 261.0, 2); // Standard PH 261 working days
+            $dailyRate   = round(($monthlyRate * 12.0) / 261.0, 2);
             $yrsService  = ben_compute_years_of_service($hireDate, $lastDay);
 
             $unpaidSalary = round($unpaidDays * $dailyRate, 2);
@@ -220,7 +438,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $prorated13th = round($ytdBasicPay / 12.0, 2);
             $leavePay     = round($unusedLeave * $dailyRate, 2);
 
-            // RA 7641 Retirement Pay: 22.5 days per year of service if age-related retirement & >= 5 years
             $retirementPay = $extraGratuity;
             if ($sepType === 'Retirement_Age' && $yrsService >= 5.0) {
                 $retirementPay = round((22.5 * $dailyRate * $yrsService) + $extraGratuity, 2);
@@ -262,17 +479,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$departments = [];
+try {
+    if (ben_has_table($pdo, 'departments')) {
+        $deptCols = $pdo->query('SHOW COLUMNS FROM departments')->fetchAll(PDO::FETCH_COLUMN);
+        $deptColsLower = array_map('strtolower', $deptCols);
+        $nameCol = 'name';
+        foreach (['department_name', 'name', 'dept_name', 'title'] as $cand) {
+            $idx = array_search($cand, $deptColsLower, true);
+            if ($idx !== false) {
+                $nameCol = $deptCols[$idx];
+                break;
+            }
+        }
+        $departments = $pdo->query("SELECT id, `{$nameCol}` AS dept_name FROM departments ORDER BY `{$nameCol}` ASC")->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Throwable $e) {}
+
 $employees = $pdo->query("
-    SELECT id, COALESCE(employee_id, id) AS emp_code, first_name, last_name, employment_status
-    FROM employees
-    ORDER BY last_name, first_name
+    SELECT e.id,
+           COALESCE(e.employee_id, e.id) AS emp_code,
+           e.first_name,
+           e.last_name,
+           e.employment_status,
+           e.date_hired,
+           e.department_id,
+           COALESCE(d.name, '') AS dept_name
+    FROM employees e
+    LEFT JOIN departments d ON d.id = e.department_id
+    ORDER BY e.last_name, e.first_name
 ")->fetchAll(PDO::FETCH_ASSOC);
+
+if (empty($departments)) {
+    $seenDepts = [];
+    foreach ($employees as $e) {
+        $did = (int)($e['department_id'] ?? 0);
+        $dnm = trim((string)($e['dept_name'] ?? ''));
+        if ($did > 0 && $dnm !== '' && !isset($seenDepts[$did])) {
+            $seenDepts[$did] = true;
+            $departments[] = ['id' => $did, 'dept_name' => $dnm];
+        }
+    }
+}
+
+$empHireMap = [];
+foreach ($employees as $empRow) {
+    $empHireMap[(int)$empRow['id']] = (string)($empRow['date_hired'] ?? '');
+}
 
 $plans = $pdo->query("SELECT * FROM benefit_plans ORDER BY category, name")->fetchAll(PDO::FETCH_ASSOC);
 
 $empBenefits = $pdo->query("
     SELECT eb.*, bp.name AS plan_name, bp.category, bp.default_amount, bp.is_taxable,
-           e.first_name, e.last_name, COALESCE(e.employee_id, e.id) AS emp_code
+           e.first_name, e.last_name, e.date_hired, COALESCE(e.employee_id, e.id) AS emp_code
     FROM employee_benefits eb
     JOIN benefit_plans bp ON bp.id = eb.benefit_plan_id
     LEFT JOIN employees e ON e.id = eb.employee_id
@@ -292,6 +551,8 @@ if (is_file($hrHeader)) {
 }
 ?>
 
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.min.css">
 <style>
   .hb-wrap { max-width: 1320px; margin: 20px auto 56px; padding: 0 20px; color: #f8fafc; }
   .hb-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
@@ -313,14 +574,97 @@ if (is_file($hrHeader)) {
   .hb-tbl th { font-size: 11px; text-transform: uppercase; color: #94a3b8; background: #0f172a; }
   .hb-ok { background: rgba(22,163,74,0.18); border: 1px solid rgba(74,222,128,0.4); color: #bbf7d0; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
   .hb-err { background: rgba(239,68,68,0.18); border: 1px solid rgba(248,113,113,0.4); color: #fecaca; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
-  .hb-pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: rgba(59,130,246,0.2); color: #93c5fd; }
+  .hb-pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: rgba(59,130,246,0.2); color: #93c5fd; display: inline-block; }
+  .hb-pill-active { background: rgba(22,163,74,0.22); color: #4ade80; }
+  .hb-pill-hold { background: rgba(217,119,6,0.22); color: #fbbf24; }
+  .hb-pill-claimed { background: rgba(59,130,246,0.22); color: #93c5fd; }
+  .tenure-box {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12.5px;
+    color: #e2e8f0;
+  }
+
+  /* Tom Select dark theme integration */
+  .ts-wrapper.hb-ts { width: 100%; }
+  .ts-wrapper.hb-ts .ts-control,
+  .ts-wrapper.hb-ts.single .ts-control,
+  .ts-wrapper.hb-ts.single.input-active .ts-control {
+    background: #0f172a !important;
+    background-color: #0f172a !important;
+    border: 1px solid #334155 !important;
+    color: #f8fafc !important;
+    border-radius: 8px !important;
+    padding: 7px 10px !important;
+    min-height: 36px;
+    font-size: 13px;
+    box-shadow: none !important;
+  }
+  .ts-wrapper.hb-ts .ts-control > .item {
+    color: #f8fafc !important;
+    background: transparent !important;
+  }
+  .ts-wrapper.hb-ts .ts-control > input,
+  .ts-wrapper.hb-ts .ts-control > input::placeholder {
+    color: #94a3b8 !important;
+  }
+  .ts-wrapper.hb-ts .ts-dropdown,
+  .ts-wrapper.hb-ts.single .ts-dropdown {
+    background: #0f172a !important;
+    background-color: #0f172a !important;
+    border: 1px solid #334155 !important;
+    color: #f8fafc !important;
+    border-radius: 8px !important;
+    margin-top: 4px;
+    z-index: 9999;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55) !important;
+  }
+  .ts-wrapper.hb-ts .ts-dropdown .option {
+    padding: 8px 10px !important;
+    color: #e2e8f0 !important;
+    background: transparent !important;
+  }
+  .ts-wrapper.hb-ts .ts-dropdown .option:hover,
+  .ts-wrapper.hb-ts .ts-dropdown .option.active,
+  .ts-wrapper.hb-ts .ts-dropdown .selected {
+    background: #2563eb !important;
+    color: #ffffff !important;
+  }
+
+  .dataTables_wrapper { color: #e2e8f0; font-size: 12.5px; }
+  .dataTables_wrapper .dataTables_filter input,
+  .dataTables_wrapper .dataTables_length select {
+    background: #0f172a;
+    color: #f8fafc;
+    border: 1px solid #334155;
+    border-radius: 7px;
+    padding: 4px 8px;
+    margin-left: 5px;
+  }
+  .dataTables_wrapper .dataTables_info,
+  .dataTables_wrapper .dataTables_paginate { margin-top: 10px; color: #94a3b8 !important; }
+  .dataTables_wrapper .dataTables_paginate .paginate_button { color: #e2e8f0 !important; border-radius: 6px !important; }
+  .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+  .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
+    background: #2563eb !important;
+    color: #fff !important;
+    border-color: transparent !important;
+  }
 </style>
 
 <div class="hb-wrap">
   <div class="hb-head">
     <div>
       <h1 style="margin:0;font-size:24px;">Benefits &amp; Separation / Retirement Pay</h1>
-      <p style="margin:4px 0 0;font-size:13px;color:#94a3b8;">Manage active employee benefits, voluntary resignations, and RA 7641 age-related retirement settlements.</p>
+      <p style="margin:4px 0 0;font-size:13px;color:#94a3b8;">Active benefits automatically sync in real time to HR &amp; Employee payslips when assigned or set to Active.</p>
     </div>
     <a href="/hr/payroll.php" class="hb-btn" style="text-decoration:none;">← Back to Payroll</a>
   </div>
@@ -345,11 +689,20 @@ if (is_file($hrHeader)) {
         <input type="hidden" name="form" value="assign_benefit">
         <div class="hb-grid">
           <div>
-            <label class="hb-lbl">Employee</label>
-            <select name="employee_id" class="hb-sel" required>
+            <label class="hb-lbl">Department</label>
+            <select id="ben_dept_select" class="hb-sel">
+              <option value="">All Departments</option>
+              <?php foreach ($departments as $dept): ?>
+                <option value="<?= (int)$dept['id'] ?>"><?= htmlspecialchars((string)$dept['dept_name'], ENT_QUOTES, 'UTF-8') ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div>
+            <label class="hb-lbl">Employee (Searchable)</label>
+            <select name="employee_id" id="ben_emp_select" class="hb-sel searchable-emp" placeholder="Type name or EMP ID..." required>
               <option value="">-- Select employee --</option>
               <?php foreach ($employees as $emp): ?>
-                <option value="<?= (int)$emp['id'] ?>">
+                <option value="<?= (int)$emp['id'] ?>" data-dept-id="<?= (int)($emp['department_id'] ?? 0) ?>">
                   [<?= htmlspecialchars((string)$emp['emp_code'], ENT_QUOTES, 'UTF-8') ?>]
                   <?= htmlspecialchars((string)($emp['last_name'] . ', ' . $emp['first_name']), ENT_QUOTES, 'UTF-8') ?>
                   (<?= htmlspecialchars((string)$emp['employment_status'], ENT_QUOTES, 'UTF-8') ?>)
@@ -359,9 +712,9 @@ if (is_file($hrHeader)) {
           </div>
           <div>
             <label class="hb-lbl">Benefit Plan</label>
-            <select name="benefit_plan_id" class="hb-sel" required>
+            <select name="benefit_plan_id" id="ben_plan_select" class="hb-sel" required>
               <?php foreach ($plans as $pl): ?>
-                <option value="<?= (int)$pl['id'] ?>">
+                <option value="<?= (int)$pl['id'] ?>" data-amount="<?= (float)$pl['default_amount'] ?>" data-min-months="<?= (int)$pl['min_tenure_months'] ?>">
                   <?= htmlspecialchars((string)$pl['name'], ENT_QUOTES, 'UTF-8') ?> — ₱<?= number_format((float)$pl['default_amount'], 2) ?>
                 </option>
               <?php endforeach; ?>
@@ -369,13 +722,28 @@ if (is_file($hrHeader)) {
           </div>
           <div>
             <label class="hb-lbl">Custom Amount (₱, optional)</label>
-            <input type="number" step="0.01" min="0" name="custom_amount" class="hb-in" placeholder="Uses plan default">
+            <input type="number" step="0.01" min="0" name="custom_amount" id="ben_custom_amount" class="hb-in" placeholder="Uses tenure-adjusted default">
           </div>
           <div>
             <label class="hb-lbl">Effective Date</label>
-            <input type="date" name="effective_date" value="<?= date('Y-m-d') ?>" class="hb-in" required>
+            <input type="date" name="effective_date" id="ben_effective_date" value="<?= date('Y-m-d') ?>" class="hb-in" required>
           </div>
         </div>
+
+        <div class="tenure-box" id="benTenureBox">
+          <div>
+            <strong>Length of Service (Tenure):</strong>
+            <span id="benTenureSummary">Select an employee to view hire date, tenure, and tenure-adjusted benefit.</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" name="apply_tenure_rule" id="benApplyTenureRule" value="1" checked>
+              <span>Apply Tenure Multiplier</span>
+            </label>
+            <span class="hb-pill" id="benTenureTier">No Employee</span>
+          </div>
+        </div>
+
         <div style="margin-bottom:12px;">
           <label class="hb-lbl">Notes</label>
           <input type="text" name="notes" class="hb-in" placeholder="e.g. Dependent slot 1, Senior medical support...">
@@ -387,10 +755,11 @@ if (is_file($hrHeader)) {
     <div class="hb-card">
       <h3>Assigned Employee Benefits</h3>
       <div class="hb-tbl-wrap">
-        <table class="hb-tbl">
+        <table class="hb-tbl ben-datatable">
           <thead>
             <tr>
               <th>Employee</th>
+              <th>Tenure</th>
               <th>Benefit Plan</th>
               <th>Category</th>
               <th>Amount</th>
@@ -402,18 +771,29 @@ if (is_file($hrHeader)) {
           </thead>
           <tbody>
             <?php if (empty($empBenefits)): ?>
-              <tr><td colspan="8" style="text-align:center;color:#94a3b8;">No benefits assigned yet.</td></tr>
+              <tr><td colspan="9" style="text-align:center;color:#94a3b8;">No benefits assigned yet.</td></tr>
             <?php else: ?>
               <?php foreach ($empBenefits as $eb): ?>
-                <?php $amt = $eb['custom_amount'] !== null ? (float)$eb['custom_amount'] : (float)$eb['default_amount']; ?>
+                <?php
+                  $amt = $eb['custom_amount'] !== null ? (float)$eb['custom_amount'] : (float)$eb['default_amount'];
+                  $tInfo = ben_compute_tenure_info($eb['date_hired'] ?? null, $eb['effective_date'] ?? null);
+                  $stVal = (string)($eb['status'] ?? 'Active');
+                  $stClass = match (strtolower(trim($stVal))) {
+                    'active'    => 'hb-pill-active',
+                    'suspended' => 'hb-pill-hold',
+                    'claimed'   => 'hb-pill-claimed',
+                    default     => '',
+                  };
+                ?>
                 <tr>
                   <td><strong><?= htmlspecialchars((string)($eb['last_name'] . ', ' . $eb['first_name']), ENT_QUOTES, 'UTF-8') ?></strong></td>
+                  <td><?= htmlspecialchars($tInfo['label'], ENT_QUOTES, 'UTF-8') ?></td>
                   <td><?= htmlspecialchars((string)$eb['plan_name'], ENT_QUOTES, 'UTF-8') ?></td>
                   <td><span class="hb-pill"><?= htmlspecialchars((string)$eb['category'], ENT_QUOTES, 'UTF-8') ?></span></td>
                   <td>₱<?= number_format($amt, 2) ?></td>
                   <td><?= !empty($eb['is_taxable']) ? 'Taxable' : 'Non-Taxable' ?></td>
                   <td><?= htmlspecialchars((string)$eb['effective_date'], ENT_QUOTES, 'UTF-8') ?></td>
-                  <td><?= htmlspecialchars((string)$eb['status'], ENT_QUOTES, 'UTF-8') ?></td>
+                  <td><span class="hb-pill <?= $stClass ?>"><?= htmlspecialchars($stVal, ENT_QUOTES, 'UTF-8') ?></span></td>
                   <td>
                     <form method="post" style="display:inline-flex;gap:4px;">
                       <input type="hidden" name="form" value="toggle_benefit_status">
@@ -472,7 +852,7 @@ if (is_file($hrHeader)) {
     <div class="hb-card">
       <h3>Benefit Plans Catalog</h3>
       <div class="hb-tbl-wrap">
-        <table class="hb-tbl">
+        <table class="hb-tbl ben-datatable">
           <thead>
             <tr>
               <th>Plan Name</th>
@@ -507,11 +887,20 @@ if (is_file($hrHeader)) {
         <input type="hidden" name="form" value="compute_separation">
         <div class="hb-grid">
           <div>
-            <label class="hb-lbl">Employee</label>
-            <select name="employee_id" class="hb-sel" required>
+            <label class="hb-lbl">Department</label>
+            <select id="sep_dept_select" class="hb-sel">
+              <option value="">All Departments</option>
+              <?php foreach ($departments as $dept): ?>
+                <option value="<?= (int)$dept['id'] ?>"><?= htmlspecialchars((string)$dept['dept_name'], ENT_QUOTES, 'UTF-8') ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div>
+            <label class="hb-lbl">Employee (Searchable)</label>
+            <select name="employee_id" id="sep_emp_select" class="hb-sel searchable-emp" placeholder="Type name or EMP ID..." required>
               <option value="">-- Select employee --</option>
               <?php foreach ($employees as $emp): ?>
-                <option value="<?= (int)$emp['id'] ?>">
+                <option value="<?= (int)$emp['id'] ?>" data-dept-id="<?= (int)($emp['department_id'] ?? 0) ?>">
                   [<?= htmlspecialchars((string)$emp['emp_code'], ENT_QUOTES, 'UTF-8') ?>]
                   <?= htmlspecialchars((string)($emp['last_name'] . ', ' . $emp['first_name']), ENT_QUOTES, 'UTF-8') ?>
                 </option>
@@ -528,7 +917,7 @@ if (is_file($hrHeader)) {
           </div>
           <div>
             <label class="hb-lbl">Hire Date</label>
-            <input type="date" name="hire_date" value="<?= date('Y-01-01', strtotime('-5 years')) ?>" class="hb-in" required>
+            <input type="date" name="hire_date" id="sep_hire_date" value="<?= date('Y-01-01', strtotime('-5 years')) ?>" class="hb-in" required>
           </div>
           <div>
             <label class="hb-lbl">Last Working Day</label>
@@ -574,7 +963,7 @@ if (is_file($hrHeader)) {
     <div class="hb-card">
       <h3>Final Pay &amp; Retirement Settlements</h3>
       <div class="hb-tbl-wrap">
-        <table class="hb-tbl">
+        <table class="hb-tbl ben-datatable">
           <thead>
             <tr>
               <th>Employee</th>
@@ -623,6 +1012,197 @@ if (is_file($hrHeader)) {
     </div>
   <?php endif; ?>
 </div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+<script>
+(function () {
+  const empHireMap = <?= json_encode($empHireMap, JSON_UNESCAPED_UNICODE) ?>;
+
+  function calcTenure(hireStr, refStr) {
+    if (!hireStr) {
+      return { months: 0, years: 0, label: 'No hire date', tier: '6–11 mos Tenure', mult: 1.0 };
+    }
+    const start = new Date(hireStr.slice(0, 10) + 'T00:00:00');
+    const end   = refStr ? new Date(refStr.slice(0, 10) + 'T00:00:00') : new Date();
+    if (Number.isNaN(start.getTime())) {
+      return { months: 0, years: 0, label: 'Invalid hire date', tier: 'Standard', mult: 1.0 };
+    }
+    const safeEnd = Number.isNaN(end.getTime()) || end < start ? start : end;
+
+    let years = safeEnd.getFullYear() - start.getFullYear();
+    let months = safeEnd.getMonth() - start.getMonth();
+    let days = safeEnd.getDate() - start.getDate();
+
+    if (days < 0) {
+      months -= 1;
+      days += new Date(safeEnd.getFullYear(), safeEnd.getMonth(), 0).getDate();
+    }
+    if (months < 0) {
+      years -= 1;
+      months += 12;
+    }
+
+    const totalMonths = Math.max(0, years * 12 + months + (days >= 15 ? 1 : 0));
+    const exactYears  = Number((totalMonths / 12).toFixed(2));
+
+    let tier = '6–11 mos Tenure';
+    let mult = 1.00;
+    if (totalMonths < 6) {
+      tier = 'Probationary (< 6 mos)';
+      mult = 0.50;
+    } else if (totalMonths < 12) {
+      tier = '6–11 mos Tenure';
+      mult = 1.00;
+    } else if (totalMonths < 36) {
+      tier = '1–2 yrs Tenure (+10%)';
+      mult = 1.10;
+    } else if (totalMonths < 60) {
+      tier = '3–4 yrs Tenure (+25%)';
+      mult = 1.25;
+    } else {
+      tier = '5+ yrs Veteran (+50%)';
+      mult = 1.50;
+    }
+
+    const parts = [];
+    if (years > 0) parts.push(`${years} yr${years > 1 ? 's' : ''}`);
+    if (months > 0) parts.push(`${months} mo${months > 1 ? 's' : ''}`);
+    if (!parts.length) parts.push(`${days} day${days !== 1 ? 's' : ''}`);
+
+    return { months: totalMonths, years: exactYears, label: parts.join(' '), tier, mult };
+  }
+
+  function updateBenefitTenurePreview() {
+    const empSel = document.getElementById('ben_emp_select');
+    const planSel = document.getElementById('ben_plan_select');
+    const effInput = document.getElementById('ben_effective_date');
+    const customInput = document.getElementById('ben_custom_amount');
+    const applyChk = document.getElementById('benApplyTenureRule');
+    const summaryEl = document.getElementById('benTenureSummary');
+    const tierEl = document.getElementById('benTenureTier');
+
+    if (!empSel || !planSel || !summaryEl || !tierEl) return;
+
+    const empId = Number(empSel.value || 0);
+    if (!empId) {
+      summaryEl.textContent = 'Select an employee to view hire date, tenure, and tenure-adjusted benefit.';
+      tierEl.textContent = 'No Employee';
+      return;
+    }
+
+    const hireDate = empHireMap[empId] || '';
+    const refDate = effInput ? effInput.value : '';
+    const t = calcTenure(hireDate, refDate);
+    const opt = planSel.selectedOptions[0];
+    const baseAmt = opt ? parseFloat(opt.getAttribute('data-amount') || '0') : 0;
+    const minMonths = opt ? parseInt(opt.getAttribute('data-min-months') || '0', 10) : 0;
+    const mult = (!applyChk || applyChk.checked) ? t.mult : 1.0;
+    const computedAmt = (baseAmt * mult).toFixed(2);
+
+    tierEl.textContent = t.tier;
+    let extra = ` • Base: ₱${baseAmt.toLocaleString('en-PH', { minimumFractionDigits: 2 })} → Tenure Amount: ₱${Number(computedAmt).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
+    if (minMonths > 0 && t.months < minMonths) {
+      extra += ` (Requires ${minMonths} mos)`;
+    }
+    if (customInput && !customInput.value) {
+      customInput.placeholder = `Auto: ₱${computedAmt}`;
+    }
+
+    summaryEl.textContent = `Hired: ${hireDate ? hireDate.slice(0, 10) : 'N/A'} • Tenure: ${t.label} (${t.years} yrs)${extra}`;
+  }
+
+  function initSearchableEmployeeWithDept(deptSelectId, empSelectId, onEmployeeChange) {
+    const deptEl = document.getElementById(deptSelectId);
+    const empEl  = document.getElementById(empSelectId);
+    if (!empEl || typeof TomSelect === 'undefined') return null;
+
+    const allOptions = Array.from(empEl.querySelectorAll('option'))
+      .filter(opt => opt.value !== '')
+      .map(opt => ({
+        value: String(opt.value),
+        text: opt.textContent.trim(),
+        deptId: String(opt.getAttribute('data-dept-id') || '')
+      }));
+
+    const ts = new TomSelect(empEl, {
+      create: false,
+      allowEmptyOption: true,
+      maxOptions: 500,
+      placeholder: 'Search employee by name or ID...',
+      searchField: ['text'],
+      onChange: function (val) {
+        if (deptEl && val) {
+          const matched = allOptions.find(o => o.value === String(val));
+          if (matched && matched.deptId && deptEl.value !== matched.deptId) {
+            deptEl.value = matched.deptId;
+          }
+        }
+        if (typeof onEmployeeChange === 'function') onEmployeeChange(val);
+      }
+    });
+
+    ts.wrapper.classList.add('hb-ts');
+
+    if (deptEl) {
+      deptEl.addEventListener('change', function () {
+        const selectedDept = String(this.value || '');
+        const currentVal = String(ts.getValue() || '');
+
+        ts.clear(true);
+        ts.clearOptions();
+
+        const filtered = selectedDept === ''
+          ? allOptions
+          : allOptions.filter(o => o.deptId === selectedDept);
+
+        ts.addOption(filtered);
+        ts.refreshOptions(false);
+
+        if (currentVal && filtered.some(o => o.value === currentVal)) {
+          ts.setValue(currentVal, true);
+        }
+        if (typeof onEmployeeChange === 'function') onEmployeeChange(ts.getValue());
+      });
+    }
+
+    return ts;
+  }
+
+  $(function () {
+    initSearchableEmployeeWithDept('ben_dept_select', 'ben_emp_select', updateBenefitTenurePreview);
+    initSearchableEmployeeWithDept('sep_dept_select', 'sep_emp_select', function (val) {
+      const hireDate = empHireMap[Number(val || 0)] || '';
+      const sepHire = document.getElementById('sep_hire_date');
+      if (sepHire && hireDate) {
+        sepHire.value = hireDate.slice(0, 10);
+      }
+    });
+
+    $('#ben_plan_select, #ben_effective_date, #benApplyTenureRule').on('change', updateBenefitTenurePreview);
+    updateBenefitTenurePreview();
+
+    $('table.ben-datatable').each(function () {
+      const $tbl = $(this);
+      const hasEmptyColspan = $tbl.find('tbody tr').length === 1 && $tbl.find('tbody tr td[colspan]').length === 1;
+      if (!hasEmptyColspan) {
+        const colCount = $tbl.find('thead th').length;
+        $tbl.DataTable({
+          pageLength: 10,
+          lengthMenu: [10, 25, 50],
+          order: [],
+          columnDefs: colCount > 1 ? [{ orderable: false, targets: colCount - 1 }] : [],
+          language: {
+            search: 'Filter table:',
+            lengthMenu: 'Show _MENU_ entries'
+          }
+        });
+      }
+    });
+  });
+})();
+</script>
 
 <?php
 $hrFooter = __DIR__ . '/../templates/hrTemplates/footer.php';

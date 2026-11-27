@@ -72,50 +72,143 @@ $navModuleEnabled = static function (
 |--------------------------------------------------------------------------
 */
 
+
+/*
+|--------------------------------------------------------------------------
+| Sidebar navigation
+|--------------------------------------------------------------------------
+*/
+
 $navItems = [
+
+  // ============================================================
+  // GENERAL
+  // ============================================================
 
   [
     '/admin/dashboard.php',
     'Dashboard',
-    "\u{2756}",
+    'bi bi-grid',
     ['dashboard'],
-    $navModuleEnabled('dashboard')
+    $navModuleEnabled('dashboard') && $navCan('dashboard', 'view')
   ],
+
+  // ============================================================
+  // HR MANAGEMENT
+  // ============================================================
+
+  [
+    '/hr/employees.php',
+    'Employee Records',
+    'bi bi-people',
+    ['employees'],
+    $navModuleEnabled('employee_records') && $navCan('employee_records', 'view')
+  ],
+
+  [
+    '/hr/onboarding.php',
+    'Employee Onboarding',
+    'bi bi-person-plus',
+    ['onboarding'],
+    $navModuleEnabled('employee_onboarding') && $navCan('employee_onboarding', 'view')
+  ],
+
+  [
+    '/hr/recruitment.php',
+    'Recruitment',
+    'bi bi-person-workspace',
+    ['recruitment'],
+    $navModuleEnabled('recruitment') && $navCan('recruitment', 'view')
+  ],
+
+  [
+    '/hr/attendance.php',
+    'Attendance Management',
+    'bi bi-clock-history',
+    ['attendance'],
+    $navModuleEnabled('attendance') && $navCan('attendance', 'view')
+  ],
+
+  [
+    '/hr/leave_requests.php',
+    'Leave Management',
+    'bi bi-calendar-check',
+    ['leave_requests'],
+    $navModuleEnabled('leave_requests') && $navCan('leave_requests', 'view')
+  ],
+
+  [
+    '/hr/payroll.php',
+    'Payroll Management',
+    'bi bi-cash-stack',
+    ['payroll'],
+    $navModuleEnabled('payroll') && $navCan('payroll', 'view')
+  ],
+
+  [
+    '/hr/payslips.php',
+    'Payslips',
+    'bi bi-receipt',
+    ['payslips'],
+    $navModuleEnabled('payslips') && $navCan('payslips', 'view')
+  ],
+
+  [
+    '/hr/promotion_management.php',
+    'Promotion Management',
+    'bi bi-graph-up-arrow',
+    ['promotion_management'],
+    $navModuleEnabled('promotion_management') && $navCan('promotion_management', 'view')
+  ],
+
+  [
+    '/hr/reports.php',
+    'Reports',
+    'bi bi-file-earmark-bar-graph',
+    ['reports'],
+    $navModuleEnabled('reports') && $navCan('reports', 'view')
+  ],
+
+  // ============================================================
+  // ADMINISTRATION
+  // ============================================================
 
   [
     '/admin/users.php',
     'User Management',
-    "\u{25C9}",
+    'bi bi-person-gear',
     ['users'],
-    $navModuleEnabled('user_management')
+    $navModuleEnabled('user_management') && $navCan('user_management', 'view')
   ],
 
   [
     '/admin/audit_logs.php',
     'Audit Trail',
-    "\u{1F4CB}",
+    'bi bi-clipboard-data',
     ['audit_logs'],
-    $navModuleEnabled('audit_logs')
+    $navModuleEnabled('audit_logs') && $navCan('audit_logs', 'view')
   ],
 
   [
     '/admin/permissions.php',
     'System Permissions',
-    "\u{2699}",
+    'bi bi-shield-lock',
     ['permissions'],
-    $navModuleEnabled('system_settings')
+    $navModuleEnabled('system_settings') && $navCan('system_settings', 'view')
   ],
 
   [
     '/admin/backup_management.php',
     'Backup Management',
-    "\u{1F4BE}",
+    'bi bi-database-check',
     ['backup_management'],
     $navModuleEnabled('backup_management')
+      && $navCan('backup_management', 'view')
       && Rbac::canManageBackups($navRole)
   ],
 
 ];
+
 
 /*
 |--------------------------------------------------------------------------
@@ -124,8 +217,21 @@ $navItems = [
 */
 
 $pageTitles = [
-  'dashboard'  => 'Dashboard',
-  'users'      => 'User Management',
+  'dashboard' => 'Dashboard',
+
+  // HR
+  'employees' => 'Employee Records',
+  'onboarding' => 'Employee Onboarding',
+  'recruitment' => 'Recruitment',
+  'attendance' => 'Attendance Management',
+  'leave_requests' => 'Leave Management',
+  'payroll' => 'Payroll Management',
+  'payslips' => 'Payslips',
+  'promotion_management' => 'Promotion Management',
+  'reports' => 'Reports',
+
+  // Admin
+  'users' => 'User Management',
   'audit_logs' => 'Audit Trail',
   'permissions' => 'System Permissions',
   'backup_management' => 'Backup Management',
@@ -450,7 +556,9 @@ $navRoleLabel = match ($navRole) {
         <?php if ($visible): ?>
           <a class="nav-item <?= in_array($currentPage, $pages, true) ? 'active' : '' ?>"
             href="<?= $href ?>">
-            <span class="nav-icon"><?= $icon ?></span>
+            <span class="nav-icon">
+              <i class="<?= htmlspecialchars($icon, ENT_QUOTES, 'UTF-8') ?>"></i>
+            </span>
             <span><?= $label ?></span>
           </a>
         <?php endif; ?>
