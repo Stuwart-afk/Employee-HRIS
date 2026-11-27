@@ -20,6 +20,100 @@ $payroll    = new Payroll($pdo);
 $psRepo     = new PdoPayslipRepository($pdo);
 $psHandler  = new GeneratePayslipHandler($psRepo);
 
+function pay_has_table(PDO $pdo, string $table): bool {
+  $stmt = $pdo->prepare(
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+  );
+  $stmt->execute([$table]);
+  return (int)$stmt->fetchColumn() > 0;
+}
+
+function pay_has_col(PDO $pdo, string $table, string $col): bool {
+  $stmt = $pdo->prepare(
+    "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?"
+  );
+  $stmt->execute([$table, $col]);
+  return (int)$stmt->fetchColumn() > 0;
+}
+
+/**
+ * Fetches active assigned benefits from `employee_benefits` + `benefit_plans` for an employee.
+ * Returns monthly total, per-cutoff total (half if semi-monthly), and detailed line items.
+ */
+function pay_get_employee_active_benefits(PDO $pdo, int $employeeId, string $payType = 'Monthly', ?string $refDate = null): array {
+  $empty = [
+    'items'         => [],
+    'monthly_total' => 0.0,
+    'cutoff_total'  => 0.0,
+    'label_list'    => '',
+  ];
+
+  if ($employeeId <= 0 || !pay_has_table($pdo, 'employee_benefits') || !pay_has_table($pdo, 'benefit_plans')) {
+    return $empty;
+  }
+
+  try {
+    $dateCheck = $refDate && strtotime($refDate) !== false ? date('Y-m-d', strtotime($refDate)) : date('Y-m-d');
+    $sql = "
+      SELECT
+        eb.id,
+        COALESCE(eb.custom_amount, bp.default_amount) AS amount,
+        bp.name AS plan_name,
+        bp.category,
+        bp.is_taxable
+      FROM `employee_benefits` eb
+      JOIN `benefit_plans` bp ON bp.id = eb.benefit_plan_id
+      WHERE eb.employee_id = :employee_id
+        AND LOWER(TRIM(COALESCE(eb.status, 'Active'))) = 'active'
+        AND eb.effective_date <= :ref_date
+        AND (eb.end_date IS NULL OR eb.end_date >= :ref_date_end)
+      ORDER BY bp.category ASC, bp.name ASC
+    ";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+      ':employee_id'  => $employeeId,
+      ':ref_date'     => $dateCheck,
+      ':ref_date_end' => $dateCheck,
+    ]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+    $items = [];
+    $monthlyTotal = 0.0;
+
+    foreach ($rows as $r) {
+      $amt = round((float)($r['amount'] ?? 0), 2);
+      $monthlyTotal += $amt;
+      $items[] = [
+        'id'         => (int)($r['id'] ?? 0),
+        'plan_name'  => (string)($r['plan_name'] ?? 'Benefit'),
+        'category'   => (string)($r['category'] ?? 'Allowance'),
+        'amount'     => $amt,
+        'is_taxable' => !empty($r['is_taxable']),
+      ];
+    }
+
+    $monthlyTotal = round($monthlyTotal, 2);
+    $cutoffTotal  = (strtolower(trim($payType)) === 'monthly')
+      ? round($monthlyTotal / 2, 2)
+      : $monthlyTotal;
+
+    $labels = array_map(
+      fn($it) => $it['plan_name'] . ' (₱' . number_format($it['amount'], 2) . ')',
+      $items
+    );
+
+    return [
+      'items'         => $items,
+      'monthly_total' => $monthlyTotal,
+      'cutoff_total'  => $cutoffTotal,
+      'label_list'    => implode(', ', $labels),
+    ];
+  } catch (Throwable $e) {
+    error_log('pay_get_employee_active_benefits error: ' . $e->getMessage());
+    return $empty;
+  }
+}
+
 /**
  * Computes approved overtime minutes and hours for an employee within a pay period.
  * Only HR-approved overtime requests are counted.
@@ -151,7 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $tab = 'periods';
   }
 
-  // ── Generate Payslips (DDD — GeneratePayslipHandler) ─────────────────────
+  // ── Generate Payslips (DDD — GeneratePayslipHandler + Active Benefits) ───
   elseif ($form === 'generate_payslips') {
     $periodId = (int)($_POST['period_id'] ?? 0);
 
@@ -299,11 +393,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               PDO::FETCH_ASSOC
             );
 
+            // Include active assigned benefits in allowance for payslip computation
+            $empBenefits = pay_get_employee_active_benefits(
+              $pdo,
+              $employeeId,
+              (string)$salary['pay_type'],
+              (string)$period['end_date']
+            );
+            $totalAllowanceForPayslip = round(
+              (float)$salary['allowance'] + (float)$empBenefits['cutoff_total'],
+              2
+            );
+
             $command = new GeneratePayslipCommand(
               employeeId: $employeeId,
               payType: (string)$salary['pay_type'],
               basicSalary: (float)$salary['basic_salary'],
-              allowance: (float)$salary['allowance'],
+              allowance: $totalAllowanceForPayslip,
               workingDays: $workingDays,
               daysWorked: $daysWorked,
               workedHours: $workedHours,
@@ -319,6 +425,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
 
             $psHandler->handle($command);
+
+            // Optional: if `payslips` table has a `benefits_amount` or `benefits` column, sync it
+            if (pay_has_table($pdo, 'payslips')) {
+              if (pay_has_col($pdo, 'payslips', 'benefits_amount')) {
+                $updBen = $pdo->prepare(
+                  "UPDATE `payslips` SET `benefits_amount` = :ben WHERE `payroll_period_id` = :pid AND `employee_id` = :eid"
+                );
+                $updBen->execute([
+                  ':ben' => (float)$empBenefits['cutoff_total'],
+                  ':pid' => $periodId,
+                  ':eid' => $employeeId,
+                ]);
+              } elseif (pay_has_col($pdo, 'payslips', 'benefits')) {
+                $updBen = $pdo->prepare(
+                  "UPDATE `payslips` SET `benefits` = :ben WHERE `payroll_period_id` = :pid AND `employee_id` = :eid"
+                );
+                $updBen->execute([
+                  ':ben' => (float)$empBenefits['cutoff_total'],
+                  ':pid' => $periodId,
+                  ':eid' => $employeeId,
+                ]);
+              }
+            }
+
             $generated++;
           } catch (\Throwable $exception) {
             $skipped++;
@@ -331,7 +461,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           }
         }
 
-        $message = "Generated {$generated} Draft payslip(s).";
+        $message = "Generated {$generated} Draft payslip(s) (with active benefits included).";
 
         if ($skipped > 0) {
           $message .= " Skipped {$skipped} employee(s).";
@@ -510,10 +640,80 @@ if ($tab === 'periods' || $tab === 'payslips') {
 if ($tab === 'payslips' && $selPeriodId > 0) {
   $selPeriod = $payroll->getPeriodById($selPeriodId);
   $payslips  = $payroll->getPayslipsByPeriod($selPeriodId);
+  foreach ($payslips as &$psRow) {
+    $benInfo = pay_get_employee_active_benefits(
+      $pdo,
+      (int)($psRow['employee_id'] ?? 0),
+      (string)($psRow['pay_type'] ?? 'Monthly'),
+      (string)($selPeriod['end_date'] ?? date('Y-m-d'))
+    );
+    $psRow['active_benefits_amount'] = $benInfo['cutoff_total'];
+    $psRow['active_benefits_list']   = $benInfo['label_list'];
+  }
+  unset($psRow);
 }
 
 require __DIR__ . '/../templates/hrTemplates/header.php';
 ?>
+
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+<style>
+  .dt-payroll-wrap {
+    padding: 6px 2px 10px;
+    overflow-x: auto;
+  }
+  .dataTables_wrapper {
+    color: #e2e8f0;
+    font-size: 13px;
+  }
+  .dataTables_wrapper .dataTables_length,
+  .dataTables_wrapper .dataTables_filter {
+    margin-bottom: 12px;
+    color: #94a3b8;
+  }
+  .dataTables_wrapper .dataTables_filter input,
+  .dataTables_wrapper .dataTables_length select {
+    background: rgba(15, 23, 42, 0.85);
+    color: #f8fafc;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    padding: 5px 10px;
+    margin-left: 6px;
+  }
+  .dataTables_wrapper .dataTables_info,
+  .dataTables_wrapper .dataTables_paginate {
+    margin-top: 12px;
+    color: #94a3b8 !important;
+  }
+  .dataTables_wrapper .dataTables_paginate .paginate_button {
+    color: #e2e8f0 !important;
+    border-radius: 6px !important;
+    border: 1px solid transparent !important;
+  }
+  .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+  .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: rgba(96, 165, 250, 0.5) !important;
+  }
+  .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+    background: rgba(59, 130, 246, 0.2) !important;
+    color: #ffffff !important;
+  }
+  table.dataTable {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  table.dataTable thead th {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22) !important;
+    color: #94a3b8;
+    text-align: left;
+  }
+  table.dataTable tbody td {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12) !important;
+    vertical-align: middle;
+  }
+</style>
 
 <section class="page-head">
   <div class="ph-text">
@@ -604,7 +804,7 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
       <p class="muted">No salaries set yet. Use the form above to add one.</p>
     <?php else: ?>
       <div class="tbl-wrap">
-        <table>
+        <table id="activeSalariesTable" class="payroll-dt">
           <thead>
             <tr>
               <th>#</th>
@@ -708,7 +908,7 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
       <p class="muted">No periods yet. Create one above.</p>
     <?php else: ?>
       <div class="tbl-wrap">
-        <table>
+        <table class="payroll-dt">
           <thead>
             <tr>
               <th>#</th>
@@ -823,7 +1023,7 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
         <h3>Generate / Refresh Payslips</h3>
         <p class="muted" style="margin-bottom:12px">
           Auto-computes pay from <strong>attendance</strong>, <strong>auto-closed schedules</strong>,
-          <strong>HR-approved overtime</strong>, and <strong>salaries</strong>
+          <strong>HR-approved overtime</strong>, <strong>assigned active benefits</strong>, and <strong>salaries</strong>
           for <strong><?= htmlspecialchars($selPeriod['period_name']) ?></strong>
           (<?= htmlspecialchars($selPeriod['start_date']) ?> →
           <?= htmlspecialchars($selPeriod['end_date']) ?>).
@@ -909,14 +1109,14 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
         <p class="muted">No payslips yet. Click "Generate Payslips" above.</p>
       <?php else: ?>
         <div class="tbl-wrap">
-          <table>
+          <table class="payroll-dt">
             <thead>
               <tr>
                 <th>#</th>
                 <th>Employee</th>
                 <th>Department</th>
                 <th class="text-right">Basic Pay</th>
-                <th class="text-right">Allowance</th>
+                <th class="text-right">Allowance &amp; Benefits</th>
                 <th class="text-right">OT Pay</th>
                 <th class="text-right">Gross</th>
                 <th class="text-right">Deductions</th>
@@ -935,7 +1135,14 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
                   </td>
                   <td><?= htmlspecialchars($ps['department_name'] ?? '—') ?></td>
                   <td class="text-right">₱<?= number_format((float)$ps['basic_pay'],       2) ?></td>
-                  <td class="text-right">₱<?= number_format((float)$ps['allowance'],       2) ?></td>
+                  <td class="text-right">
+                    ₱<?= number_format((float)$ps['allowance'], 2) ?>
+                    <?php if (!empty($ps['active_benefits_list'])): ?>
+                      <div style="font-size:11px;color:#34d399;margin-top:2px;">
+                        Benefits: <?= htmlspecialchars((string)$ps['active_benefits_list']) ?>
+                      </div>
+                    <?php endif; ?>
+                  </td>
                   <td class="text-right">₱<?= number_format((float)$ps['overtime_pay'],    2) ?></td>
                   <td class="text-right">₱<?= number_format((float)$ps['gross_pay'],       2) ?></td>
                   <td class="text-right">₱<?= number_format((float)$ps['total_deductions'], 2) ?></td>
@@ -1008,6 +1215,8 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
   <a class="btn btn-secondary" href="/hr/dashboard.php">← Back to HR Dashboard</a>
 </div>
 
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script>
   function fillCutoff(half) {
     const now = new Date();
@@ -1034,4 +1243,28 @@ require __DIR__ . '/../templates/hrTemplates/header.php';
       document.getElementById('pay_date').value = `${ny}-${nm}-05`;
     }
   }
+
+  (function () {
+    if (window.jQuery && $.fn && $.fn.DataTable) {
+      $(function () {
+        $('table.payroll-dt').each(function () {
+          const $tbl = $(this);
+          if ($.fn.DataTable.isDataTable(this)) return;
+          const hasEmptyColspan = $tbl.find('tbody tr').length === 1 && $tbl.find('tbody tr td[colspan]').length === 1;
+          if (!hasEmptyColspan) {
+            $tbl.wrap('<div class="dt-payroll-wrap"></div>');
+            $tbl.DataTable({
+              pageLength: 10,
+              lengthMenu: [10, 25, 50, 100],
+              order: [],
+              language: {
+                search: 'Filter table:',
+                lengthMenu: 'Show _MENU_ entries'
+              }
+            });
+          }
+        });
+      });
+    }
+  })();
 </script>

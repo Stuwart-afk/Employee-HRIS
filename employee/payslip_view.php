@@ -22,6 +22,82 @@ if (!$payslipId) {
     exit;
 }
 
+function emp_pv_has_table(PDO $pdo, string $table): bool {
+    $stmt = $pdo->prepare(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?"
+    );
+    $stmt->execute([$table]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+function emp_pv_get_benefits(PDO $pdo, int $employeeId, string $payType = 'Monthly', ?string $refDate = null): array {
+    $empty = [
+        'items'         => [],
+        'monthly_total' => 0.0,
+        'cutoff_total'  => 0.0,
+    ];
+
+    if ($employeeId <= 0 || !emp_pv_has_table($pdo, 'employee_benefits') || !emp_pv_has_table($pdo, 'benefit_plans')) {
+        return $empty;
+    }
+
+    try {
+        $dateCheck = ($refDate && strtotime($refDate) !== false) ? date('Y-m-d', strtotime($refDate)) : date('Y-m-d');
+        $sql = "
+            SELECT
+                eb.id,
+                COALESCE(eb.custom_amount, bp.default_amount) AS amount,
+                eb.effective_date,
+                eb.notes,
+                bp.name AS plan_name,
+                bp.category,
+                bp.is_taxable
+            FROM `employee_benefits` eb
+            JOIN `benefit_plans` bp ON bp.id = eb.benefit_plan_id
+            WHERE eb.employee_id = :employee_id
+              AND LOWER(TRIM(COALESCE(eb.status, 'Active'))) = 'active'
+              AND eb.effective_date <= :ref_date
+              AND (eb.end_date IS NULL OR eb.end_date >= :ref_date_end)
+            ORDER BY bp.category ASC, bp.name ASC
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([
+            ':employee_id'  => $employeeId,
+            ':ref_date'     => $dateCheck,
+            ':ref_date_end' => $dateCheck,
+        ]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $items = [];
+        $monthlyTotal = 0.0;
+        $isMonthly = strtolower(trim($payType)) === 'monthly';
+
+        foreach ($rows as $r) {
+            $amt = round((float)($r['amount'] ?? 0), 2);
+            $monthlyTotal += $amt;
+            $items[] = [
+                'plan_name'  => (string)($r['plan_name'] ?? 'Benefit'),
+                'category'   => (string)($r['category'] ?? 'Allowance'),
+                'amount'     => $amt,
+                'cutoff_amt' => $isMonthly ? round($amt / 2, 2) : $amt,
+                'is_taxable' => !empty($r['is_taxable']),
+            ];
+        }
+
+        $monthlyTotal = round($monthlyTotal, 2);
+        $cutoffTotal  = $isMonthly ? round($monthlyTotal / 2, 2) : $monthlyTotal;
+
+        return [
+            'items'         => $items,
+            'monthly_total' => $monthlyTotal,
+            'cutoff_total'  => $cutoffTotal,
+        ];
+    } catch (Throwable $e) {
+        error_log('emp_pv_get_benefits error: ' . $e->getMessage());
+        return $empty;
+    }
+}
+
 try {
     $stmt = $pdo->prepare("
         SELECT
@@ -57,6 +133,13 @@ if (!$ps) {
     http_response_code(404);
     exit('Payslip not found or access denied.');
 }
+
+$empBenefits = emp_pv_get_benefits(
+    $pdo,
+    (int)$employeeId,
+    (string)($ps['pay_type'] ?? 'Monthly'),
+    (string)($ps['end_date'] ?? date('Y-m-d'))
+);
 
 $fullName    = trim($ps['first_name'] . ' ' . $ps['last_name']);
 $hoursWorked = isset($ps['hours_worked']) && $ps['hours_worked'] !== null
@@ -180,13 +263,14 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
   .attend-box .val { font-size: 18px; font-weight: 700; color: #1e293b; }
   .attend-box .lbl { font-size: 10px; color: #6b7280; text-transform: uppercase; margin-top: 2px; }
 
-  /* Earnings / Deductions rows */
+  /* Earnings / Deductions / Benefits rows */
+  .slip-section { margin-bottom: 16px; }
   .slip-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-  .slip-row  { display: flex; justify-content: space-between; padding: 5px 10px; font-size: 13px; }
+  .slip-row  { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 5px 10px; font-size: 13px; }
   .slip-row:nth-child(even) { background: #f9fafb; }
   .slip-row.total { font-weight: 700; border-top: 2px solid #1e293b; margin-top: 4px; padding-top: 8px; }
   .slip-row .label  { color: #374151; }
-  .slip-row .amount { font-variant-numeric: tabular-nums; }
+  .slip-row .amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .text-green { color: #065f46; }
   .text-red   { color: #b91c1c; }
 
@@ -416,6 +500,40 @@ require __DIR__ . '/../templates/employeeTemplates/header.php';
         </div>
       </div>
 
+    </div>
+
+    <!-- Assigned Employee Benefits -->
+    <div class="slip-section">
+      <div class="section-title">Assigned Benefits</div>
+      <?php if (empty($empBenefits['items'])): ?>
+        <div class="slip-row">
+          <span class="label" style="color:#6b7280">No active benefits assigned.</span>
+          <span class="amount">₱0.00</span>
+        </div>
+      <?php else: ?>
+        <?php foreach ($empBenefits['items'] as $bItem): ?>
+          <div class="slip-row">
+            <span class="label">
+              <?= htmlspecialchars($bItem['plan_name'], ENT_QUOTES, 'UTF-8') ?>
+              <small style="color:#6b7280">
+                (<?= htmlspecialchars($bItem['category'], ENT_QUOTES, 'UTF-8') ?>
+                • <?= $bItem['is_taxable'] ? 'Taxable' : 'Non-Taxable' ?>
+                • Monthly: ₱<?= number_format((float)$bItem['amount'], 2) ?>)
+              </small>
+            </span>
+            <span class="amount text-green">₱<?= number_format((float)$bItem['cutoff_amt'], 2) ?></span>
+          </div>
+        <?php endforeach; ?>
+        <div class="slip-row total">
+          <span class="label">
+            Benefits (Cut-Off Share)
+            <small style="color:#6b7280;font-weight:400">
+              — Monthly Total: ₱<?= number_format((float)$empBenefits['monthly_total'], 2) ?>
+            </small>
+          </span>
+          <span class="amount text-green">₱<?= number_format((float)$empBenefits['cutoff_total'], 2) ?></span>
+        </div>
+      <?php endif; ?>
     </div>
 
     <!-- Net pay -->
