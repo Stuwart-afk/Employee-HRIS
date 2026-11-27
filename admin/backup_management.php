@@ -58,6 +58,32 @@ try {
     error_log('Unable to load backup settings: ' . $e->getMessage());
 }
 
+$backupActivityLogs = [];
+
+try {
+    $activityStmt = $pdo->query("
+        SELECT
+            id,
+            operation_type,
+            backup_type,
+            status,
+            filename,
+            request_id,
+            restore_history_id,
+            started_at,
+            completed_at,
+            message,
+            TIMESTAMPDIFF(SECOND, started_at, COALESCE(completed_at, NOW())) AS duration_seconds
+        FROM hris_backup_metadata.backup_activity_logs
+        ORDER BY started_at DESC, id DESC
+        LIMIT 100
+    ");
+
+    $backupActivityLogs = $activityStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log('Unable to load backup activity logs: ' . $e->getMessage());
+}
+
 require __DIR__ . '/../templates/adminTemplates/header.php';
 
 
@@ -402,6 +428,28 @@ foreach ($activityDates as $activity) {
 
                     <span>
                         View Safety Backups
+                        <i class="fas fa-arrow-right"></i>
+                    </span>
+                </div>
+
+            </button>
+
+            <!-- OPEN BACKUP ACTIVITY MODAL -->
+            <button
+                type="button"
+                class="backup-navigation-card"
+                data-open-modal="backupActivityLogModal">
+
+                <div class="backup-navigation-icon history-icon">
+                    <i class="fas fa-list-alt"></i>
+                </div>
+
+                <div class="backup-navigation-content">
+                    <h3>View Backup Activity</h3>
+                    <p>See automatic, manual, safety, and restore events.</p>
+
+                    <span>
+                        View Activity Log
                         <i class="fas fa-arrow-right"></i>
                     </span>
                 </div>
@@ -1096,6 +1144,92 @@ foreach ($activityDates as $activity) {
 
         </div>
 
+    </div>
+
+    <!-- ======================================
+         BACKUP ACTIVITY LOG MODAL
+    ======================================= -->
+
+    <div
+        class="backup-modal backup-list-modal-wrapper"
+        id="backupActivityLogModal"
+        aria-hidden="true">
+
+        <div class="backup-modal-overlay" data-close-modal></div>
+
+        <div
+            class="backup-modal-content backup-list-modal backup-activity-log-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="backupActivityLogTitle">
+
+            <div class="backup-list-modal-header">
+                <div>
+                    <h2 id="backupActivityLogTitle">Backup Activity Log</h2>
+                    <p>Permanent records of automatic, manual, safety, and restore operations.</p>
+                </div>
+
+                <button type="button" data-close-modal class="backup-list-close" aria-label="Close backup activity">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <?php if (empty($backupActivityLogs)): ?>
+                <div class="backup-empty">
+                    <h3>No activity recorded yet</h3>
+                    <p>New backup and restore operations will appear here.</p>
+                </div>
+            <?php else: ?>
+                <div class="backup-table-wrapper">
+                    <table class="backup-table backup-activity-table">
+                        <thead>
+                            <tr>
+                                <th>Started</th>
+                                <th>Operation</th>
+                                <th>Trigger</th>
+                                <th>Status</th>
+                                <th>File</th>
+                                <th>Duration</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($backupActivityLogs as $activity): ?>
+                                <?php
+                                $activityStatus = strtolower((string) ($activity['status'] ?? 'running'));
+                                $duration = (int) ($activity['duration_seconds'] ?? 0);
+                                $durationLabel = $duration >= 60
+                                    ? floor($duration / 60) . 'm ' . ($duration % 60) . 's'
+                                    : $duration . 's';
+                                ?>
+                                <tr>
+                                    <td><?= htmlspecialchars((string) ($activity['started_at'] ?? ''), ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td><?= htmlspecialchars(str_replace('_', ' ', ucwords((string) ($activity['operation_type'] ?? ''))), ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td><?= htmlspecialchars(ucfirst((string) ($activity['backup_type'] ?? '')), ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td><span class="backup-status <?= htmlspecialchars($activityStatus, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars(ucfirst($activityStatus), ENT_QUOTES, 'UTF-8') ?></span></td>
+                                    <td>
+                                        <?php if (!empty($activity['filename'])): ?>
+                                            <a href="/admin/backup/download?file=<?= rawurlencode((string) $activity['filename']) ?>">
+                                                <?= htmlspecialchars((string) $activity['filename'], ENT_QUOTES, 'UTF-8') ?>
+                                            </a>
+                                        <?php else: ?>
+                                            —
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?= htmlspecialchars($durationLabel, ENT_QUOTES, 'UTF-8') ?></td>
+                                    <td title="<?= htmlspecialchars((string) ($activity['message'] ?? ''), ENT_QUOTES, 'UTF-8') ?>">
+                                        <?= htmlspecialchars((string) ($activity['message'] ?? '—'), ENT_QUOTES, 'UTF-8') ?>
+                                        <?php if (!empty($activity['request_id'])): ?>
+                                            <small class="backup-activity-request">Request: <?= htmlspecialchars((string) $activity['request_id'], ENT_QUOTES, 'UTF-8') ?></small>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
 
     <!-- ======================================
