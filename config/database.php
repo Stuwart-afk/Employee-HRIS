@@ -245,6 +245,106 @@ if (isset($pdo) && $pdo instanceof PDO) {
                         OR (m.module_key = 'payslips'             AND p.permission_key = 'view')
                         OR (m.module_key = 'promotion_management' AND p.permission_key IN ('view','submit')))");
             }
+
+            // ── Full-scope database audit safety net ───────────────────────
+            // Existing Docker volumes do not rerun monitoring/initdb SQL.
+            // Install indexes and triggers non-destructively on first request.
+            $auditTables = [
+                'departments', 'positions', 'employees', 'users',
+                'promotion_requests', 'holidays', 'promotion_logs',
+                'user_setup_tokens', 'password_reset_tokens', 'attendance',
+                'overtime_requests', 'leave', 'leave_types', 'leave_balances',
+                'leave_requests', 'leave_request_logs', 'backup_settings',
+                'deduction_rates', 'employee_salaries', 'payroll_periods',
+                'payslips', 'benefit_plans', 'employee_benefits',
+                'separation_settlements', 'roles', 'modules', 'permissions',
+                'role_permissions', 'rank_permissions', 'automatic_backup_logs',
+                'backup_schedule_history', 'restore_history', 'safety_backups'
+            ];
+
+            $hasAuditIndex = static function (string $indexName) use ($pdo, $dbName): bool {
+                $stmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM information_schema.STATISTICS
+                     WHERE TABLE_SCHEMA = :schema
+                       AND TABLE_NAME = \'audit_logs\'
+                       AND INDEX_NAME = :index_name'
+                );
+                $stmt->execute([':schema' => (string)$dbName, ':index_name' => $indexName]);
+                return (int)$stmt->fetchColumn() > 0;
+            };
+
+            if (!$hasAuditIndex('idx_audit_created_at')) {
+                $pdo->exec('ALTER TABLE audit_logs ADD INDEX idx_audit_created_at (created_at, id)');
+            }
+            if (!$hasAuditIndex('idx_audit_action_created')) {
+                $pdo->exec('ALTER TABLE audit_logs ADD INDEX idx_audit_action_created (action, created_at, id)');
+            }
+
+            $hasTable = static function (string $tableName) use ($pdo, $dbName): bool {
+                $stmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM information_schema.TABLES
+                     WHERE TABLE_SCHEMA = :schema AND TABLE_NAME = :table_name'
+                );
+                $stmt->execute([':schema' => (string)$dbName, ':table_name' => $tableName]);
+                return (int)$stmt->fetchColumn() > 0;
+            };
+
+            $hasTrigger = static function (string $triggerName) use ($pdo, $dbName): bool {
+                $stmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM information_schema.TRIGGERS
+                     WHERE TRIGGER_SCHEMA = :schema AND TRIGGER_NAME = :trigger_name'
+                );
+                $stmt->execute([':schema' => (string)$dbName, ':trigger_name' => $triggerName]);
+                return (int)$stmt->fetchColumn() > 0;
+            };
+
+            // A single sentinel avoids 99 trigger-existence queries on every
+            // request after the one-time installation has completed.
+            if (!$hasTrigger('trg_audit_departments_ai')) {
+                foreach ($auditTables as $tableName) {
+                    if (!$hasTable($tableName)) {
+                        continue;
+                    }
+
+                    $quotedTable = str_replace('`', '``', $tableName);
+                    $entity = str_replace("'", "''", $tableName);
+
+                    foreach ([
+                        ['ai', 'INSERT', 'insert', 'NEW.id'],
+                        ['au', 'UPDATE', 'update', 'NEW.id'],
+                        ['ad', 'DELETE', 'delete', 'OLD.id'],
+                    ] as [$suffix, $timing, $operation, $entityId]) {
+                        $triggerName = 'trg_audit_' . $tableName . '_' . $suffix;
+                        if ($hasTrigger($triggerName)) {
+                            continue;
+                        }
+
+                        $quotedTrigger = str_replace('`', '``', $triggerName);
+                        $pdo->exec("CREATE TRIGGER `{$quotedTrigger}` AFTER {$timing} ON `{$quotedTable}`
+                        FOR EACH ROW
+                        BEGIN
+                            IF COALESCE(@hris_audit_suspended, 0) = 0 THEN
+                                INSERT INTO audit_logs (actor_user_id, action, entity_type, entity_id, details)
+                                VALUES (
+                                    @hris_actor_user_id,
+                                    'db.{$operation}',
+                                    '{$entity}',
+                                    {$entityId},
+                                    JSON_OBJECT(
+                                        'source', 'database_trigger',
+                                        'operation', '{$operation}',
+                                        'table', '{$entity}',
+                                        'request_id', COALESCE(@hris_request_id, 'unknown'),
+                                        'route', COALESCE(@hris_route, 'unknown'),
+                                        'ip', COALESCE(@hris_ip, 'unknown'),
+                                        'severity', IF('{$operation}' = 'delete', 'high', 'info')
+                                    )
+                                );
+                            END IF;
+                        END");
+                    }
+                }
+            }
         }
     } catch (Throwable $e) {
         error_log('HRIS schema patch failed: ' . $e->getMessage());

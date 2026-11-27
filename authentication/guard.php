@@ -310,6 +310,9 @@ function require_access(
 
     $role = $account['role'];
 
+    // Make actor/request metadata available to database-level audit triggers.
+    guard_bind_audit_context($pdo, (int)$account['user_id']);
+
     // Update last activity for the online users widget.
     // config/database.php already handles adding this column.
     try {
@@ -463,6 +466,34 @@ function current_user_id()
 function current_employee_id()
 {
     return $_SESSION['employee_id'] ?? null;
+}
+
+/**
+ * Bind request identity to the current MySQL connection.
+ * Database-level audit triggers use these session variables when a module
+ * writes directly with PDO without an explicit AuditLogger call.
+ */
+function guard_bind_audit_context(PDO $pdo, int $userId): void
+{
+    try {
+        if (empty($_SESSION['audit_request_id'])) {
+            $_SESSION['audit_request_id'] = bin2hex(random_bytes(16));
+        }
+
+        $requestId = $pdo->quote((string)$_SESSION['audit_request_id']);
+        $route = $pdo->quote((string)($_SERVER['REQUEST_URI'] ?? ($_SERVER['SCRIPT_NAME'] ?? 'unknown')));
+        $ip = $pdo->quote((string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+
+        $pdo->exec(
+            'SET @hris_actor_user_id = ' . (int)$userId .
+            ', @hris_request_id = ' . $requestId .
+            ', @hris_route = ' . $route .
+            ', @hris_ip = ' . $ip .
+            ', @hris_audit_suspended = 0'
+        );
+    } catch (Throwable $e) {
+        error_log('HRIS audit context binding failed: ' . $e->getMessage());
+    }
 }
 
 /**
