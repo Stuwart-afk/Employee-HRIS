@@ -21,6 +21,7 @@ log() {
 }
 
 mysql_command() {
+    MYSQL_PWD="${DB_PASSWORD:?DB_PASSWORD is not configured}" \
     mysql \
         --host="$DB_HOST" \
         --port="${DB_PORT:-3306}" \
@@ -184,17 +185,9 @@ import_backup_to_database() {
 
     log "Importing ${filename} into ${database}..."
 
-    if [[ "$database" == "$RESTORE_TEST_DB" ]]; then
+    # Always use MySQL root for restore imports.
+    # Restore operations drop and recreate tables.
     if gzip -dc "$backup_file" | mysql_admin_command "$database"; then
-        log "Import completed: ${database}"
-        return 0
-    else
-        log "ERROR: Import failed: ${database}"
-        return 1
-    fi
-fi
-
-if gzip -dc "$backup_file" | mysql_command "$database"; then
         log "Import completed: ${database}"
         return 0
     else
@@ -612,14 +605,11 @@ validate_restore_database() {
     local row_count
     local total_records=0
     local total_tables=0
-    local mysql_runner="mysql_command"
+    local mysql_runner="mysql_admin_command"
 
     validate_restore_database_name "$database" || return 1
 
-    if [[ "$database" == "$RESTORE_TEST_DB" ]]; then
-        mysql_runner="mysql_admin_command"
-    fi
-
+    
     log "Starting database validation: ${database}"
 
     table_query="
