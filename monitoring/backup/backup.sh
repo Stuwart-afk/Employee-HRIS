@@ -16,6 +16,10 @@ BACKUP_RESULT_FILENAME=""
 SAFETY_BACKUP_FILENAME=""
 CURRENT_RESTORE_REQUEST_ID=""
 RESTORE_HEARTBEAT_PID=""
+CURRENT_RESTORE_HISTORY_ID=""
+BACKUP_ACTIVITY_ID=""
+SAFETY_ACTIVITY_ID=""
+RESTORE_ACTIVITY_ID=""
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
@@ -39,6 +43,69 @@ mysql_admin_command() {
         "$@"
 }
 
+activity_sql_escape() {
+    printf '%s' "${1:-}" | sed "s/'/''/g"
+}
+
+start_backup_activity() {
+    local operation_type="$1"
+    local backup_type="$2"
+    local filename="${3:-}"
+    local request_id="${4:-}"
+    local restore_history_id="${5:-NULL}"
+    local escaped_operation
+    local escaped_backup
+    local escaped_filename
+    local escaped_request
+    local activity_id
+
+    escaped_operation=$(activity_sql_escape "$operation_type")
+    escaped_backup=$(activity_sql_escape "$backup_type")
+    escaped_filename=$(activity_sql_escape "$filename")
+    escaped_request=$(activity_sql_escape "$request_id")
+
+    activity_id=$(mysql_command "$BACKUP_METADATA_DB" --batch --skip-column-names --execute="
+        INSERT INTO backup_activity_logs (
+            operation_type, backup_type, filename, request_id,
+            restore_history_id, started_at, status
+        ) VALUES (
+            '${escaped_operation}', '${escaped_backup}',
+            NULLIF('${escaped_filename}', ''),
+            NULLIF('${escaped_request}', ''),
+            ${restore_history_id}, NOW(), 'running'
+        );
+        SELECT LAST_INSERT_ID();
+    ") || return 1
+
+    [[ "$activity_id" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$activity_id"
+}
+
+finish_backup_activity() {
+    local activity_id="$1"
+    local status="$2"
+    local message="${3:-}"
+    local filename="${4:-}"
+    local escaped_status
+    local escaped_message
+    local escaped_filename
+
+    [[ "$activity_id" =~ ^[0-9]+$ ]] || return 0
+
+    escaped_status=$(activity_sql_escape "$status")
+    escaped_message=$(activity_sql_escape "$message")
+    escaped_filename=$(activity_sql_escape "$filename")
+
+    mysql_command "$BACKUP_METADATA_DB" --execute="
+        UPDATE backup_activity_logs
+        SET status = '${escaped_status}',
+            filename = COALESCE(NULLIF('${escaped_filename}', ''), filename),
+            completed_at = NOW(),
+            message = NULLIF('${escaped_message}', '')
+        WHERE id = ${activity_id};
+    "
+}
+
 perform_backup() {
     local trigger="${1:-automatic}"
     local timestamp
@@ -53,6 +120,10 @@ perform_backup() {
     SAFETY_BACKUP_FILENAME=""
 
     log "Starting ${trigger} database backup..."
+
+    BACKUP_ACTIVITY_ID=""
+    BACKUP_ACTIVITY_ID=$(start_backup_activity \
+        "backup" "$trigger" "" "" "NULL" 2>/dev/null || true)
 
     mkdir -p "$BACKUP_DIR"
 
@@ -75,6 +146,8 @@ perform_backup() {
         if [[ ! -s "$temp_file" ]] || ! gzip -t "$temp_file"; then
             rm -f "$temp_file"
             log "ERROR: Backup file is empty or corrupted."
+            finish_backup_activity "$BACKUP_ACTIVITY_ID" "failed" \
+                "Backup file was empty or failed gzip verification." || true
             return 1
         fi
 
@@ -95,12 +168,16 @@ perform_backup() {
             -delete
 
         log "Backup cleanup completed."
+        finish_backup_activity "$BACKUP_ACTIVITY_ID" "success" \
+            "${trigger^} database backup completed successfully." "$filename" || true
         return 0
 
     else
         unset MYSQL_PWD
         rm -f "$temp_file"
         log "ERROR: Database backup failed."
+        finish_backup_activity "$BACKUP_ACTIVITY_ID" "failed" \
+            "Database dump failed while creating the backup." || true
         return 1
     fi
 }
@@ -156,12 +233,22 @@ create_safety_backup() {
         log "Safety backup file: ${filename}"
         log "Safety backup size: $(du -h "$final_file" | cut -f1)"
 
+        SAFETY_ACTIVITY_ID=""
+        SAFETY_ACTIVITY_ID=$(start_backup_activity \
+            "safety_backup" "safety" "$filename" \
+            "$CURRENT_RESTORE_REQUEST_ID" \
+            "${CURRENT_RESTORE_HISTORY_ID:-NULL}" 2>/dev/null || true)
+        finish_backup_activity "$SAFETY_ACTIVITY_ID" "success" \
+            "Safety backup created before live database restoration." "$filename" || true
+
         return 0
 
     else
         rm -f "$temp_file"
 
         log "ERROR: Could not create safety backup."
+        finish_backup_activity "$SAFETY_ACTIVITY_ID" "failed" \
+            "Could not create the pre-restore safety backup." || true
         return 1
     fi
 }
@@ -185,8 +272,6 @@ import_backup_to_database() {
 
     log "Importing ${filename} into ${database}..."
 
-    # Always use MySQL root for restore imports.
-    # Restore operations drop and recreate tables.
     if gzip -dc "$backup_file" | mysql_admin_command "$database"; then
         log "Import completed: ${database}"
         return 0
@@ -249,6 +334,11 @@ restore_history_id=$(create_restore_history_record "$request_id" "$filename") ||
 }
 
 log "Restore history ID: ${restore_history_id}"
+CURRENT_RESTORE_HISTORY_ID="$restore_history_id"
+RESTORE_ACTIVITY_ID=""
+RESTORE_ACTIVITY_ID=$(start_backup_activity \
+    "restore_live" "restore" "$filename" "$request_id" \
+    "$restore_history_id" 2>/dev/null || true)
 
     export MYSQL_PWD="$DB_PASSWORD"
 
@@ -609,7 +699,6 @@ validate_restore_database() {
 
     validate_restore_database_name "$database" || return 1
 
-    
     log "Starting database validation: ${database}"
 
     table_query="
@@ -709,10 +798,12 @@ validate_restore_test_database() {
 
 perform_restore_test() {
     local filename="$1"
+    local request_id="${2:-}"
     local backup_file="${BACKUP_DIR}/${filename}"
     local import_status=0
     local validation_status=0
     local cleanup_status=0
+    local activity_id=""
 
     log "Starting restore test for: ${filename}"
 
@@ -735,6 +826,9 @@ perform_restore_test() {
         log "ERROR: Backup archive failed gzip integrity check."
         return 1
     fi
+
+    activity_id=$(start_backup_activity \
+        "restore_test" "restore" "$filename" "$request_id" "NULL" 2>/dev/null || true)
 
     export MYSQL_PWD="$DB_PASSWORD"
 
@@ -775,10 +869,14 @@ perform_restore_test() {
 
     if (( import_status != 0 || validation_status != 0 || cleanup_status != 0 )); then
         log "Restore test FAILED: ${filename}"
+        finish_backup_activity "$activity_id" "failed" \
+            "Restore-test import or validation failed." "$filename" || true
         return 1
     fi
 
     log "Restore test PASSED: ${filename}"
+    finish_backup_activity "$activity_id" "success" \
+        "Restore-test import and validation passed." "$filename" || true
     return 0
 }
 
@@ -907,7 +1005,7 @@ process_restore_test_requests() {
 
         log "Restore-test request received: ${request_id}"
 
-        if perform_restore_test "$filename"; then
+        if perform_restore_test "$filename" "$request_id"; then
             write_request_result \
                 "$request_id" \
                 "success" \
@@ -1290,6 +1388,8 @@ finish_restore_operation() {
     if ! update_restore_history "$request_id" "$status" "$message"; then
         log "WARNING: Restore history completion could not be saved."
     fi
+
+    finish_backup_activity "$RESTORE_ACTIVITY_ID" "$status" "$message" "$filename" || true
 
     write_request_result "$request_id" "$status" "$filename" "$message"
 }
