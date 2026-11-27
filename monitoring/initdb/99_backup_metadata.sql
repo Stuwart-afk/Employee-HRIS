@@ -97,6 +97,32 @@ CREATE TABLE IF NOT EXISTS safety_backups (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
+-- 6. Unified backup activity log for the Backup Management UI
+CREATE TABLE IF NOT EXISTS backup_activity_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    operation_type ENUM('backup', 'restore_test', 'restore_live', 'safety_backup', 'verification', 'cleanup') NOT NULL,
+    backup_type ENUM('automatic', 'manual', 'safety', 'restore') NOT NULL,
+    status ENUM('running', 'success', 'failed', 'expired') NOT NULL DEFAULT 'running',
+    filename VARCHAR(255) NULL,
+    request_id CHAR(36) NULL,
+    restore_history_id BIGINT UNSIGNED NULL,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    message TEXT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_activity_created_at (created_at),
+    KEY idx_activity_status (status),
+    KEY idx_activity_type (backup_type, operation_type),
+    KEY idx_activity_request_id (request_id),
+    KEY idx_activity_restore_history (restore_history_id),
+    CONSTRAINT fk_activity_restore_history
+        FOREIGN KEY (restore_history_id)
+        REFERENCES restore_history (id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
 -- Grant the existing application user access to the metadata DB.
 GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX
 ON hris_backup_metadata.*
