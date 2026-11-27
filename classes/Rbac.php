@@ -193,7 +193,7 @@ final class Rbac
         } catch (Throwable $e) {
             error_log(
                 'RBAC role permission loading failed: ' .
-                $e->getMessage()
+                    $e->getMessage()
             );
         }
 
@@ -257,7 +257,7 @@ final class Rbac
         } catch (Throwable $e) {
             error_log(
                 'RBAC rank permission loading failed: ' .
-                $e->getMessage()
+                    $e->getMessage()
             );
         }
 
@@ -292,10 +292,16 @@ final class Rbac
         $module = self::normalizeModule($module);
         $ability = self::normalizeAction($ability);
 
+        // Protected Admin modules.
         if (
             $role === 'admin' &&
             in_array($module, self::ADMIN_ALWAYS, true)
         ) {
+            return 'all';
+        }
+
+        // Dashboard is always accessible to every system role.
+        if ($module === 'dashboard') {
             return 'all';
         }
 
@@ -343,10 +349,17 @@ final class Rbac
         $module = self::normalizeModule($module);
         $ability = self::normalizeAction($ability);
 
+        // Protected Admin modules.
         if (
             $role === 'admin' &&
             in_array($module, self::ADMIN_ALWAYS, true)
         ) {
+            return true;
+        }
+
+        // Protected Dashboard access for Admin and HR.
+        // Dashboard is always accessible to every system role.
+        if ($module === 'dashboard') {
             return true;
         }
 
@@ -388,6 +401,12 @@ final class Rbac
             return false;
         }
 
+        // Dashboard is always enabled for Admin and HR.
+        // Dashboard is always enabled for every system role.
+        if ($module === 'dashboard') {
+            return true;
+        }
+
         try {
             $stmt = $pdo->prepare("
                 SELECT is_active
@@ -408,7 +427,7 @@ final class Rbac
         } catch (Throwable $e) {
             error_log(
                 'RBAC module lookup failed: ' .
-                $e->getMessage()
+                    $e->getMessage()
             );
 
             return false;
@@ -559,7 +578,7 @@ final class Rbac
         } catch (Throwable $e) {
             error_log(
                 'RBAC team lookup failed: ' .
-                $e->getMessage()
+                    $e->getMessage()
             );
 
             // Fail closed.
