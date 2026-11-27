@@ -3,6 +3,7 @@
 // Create a login account and send a password setup invitation.
 
 require_once __DIR__ . '/../authentication/guard.php';
+require_once __DIR__ . '/../classes/AuditLogger.php';
 
 $account = require_access('user_management', 'edit', 'all');
 
