@@ -1558,3 +1558,58 @@ body.modal-open {
   padding: 0 5px;
   color: #aaa0b2;
 }
+
+/* ==========================================
+   BACKUP ACTIVITY LOG
+========================================== */
+.backup-activity-log-modal {
+  max-width: 1280px;
+}
+.backup-activity-table {
+  min-width: 980px;
+}
+.backup-activity-table td,
+.backup-activity-table th {
+  vertical-align: top;
+}
+.backup-activity-table td:nth-child(5) {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+}
+.backup-activity-table td:nth-child(7) {
+  min-width: 220px;
+  max-width: 360px;
+  white-space: normal;
+  line-height: 1.45;
+}
+.backup-activity-table a {
+  color: #b79be8;
+}
+.backup-activity-request {
+  display: block;
+  margin-top: 5px;
+  color: #9d93aa;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.backup-status.running {
+  color: #8dc7ff;
+  background: rgba(80, 155, 220, 0.14);
+}
+.backup-status.failed {
+  color: #ff9696;
+  background: rgba(220, 80, 80, 0.14);
+}
+.backup-status.expired {
+  color: #aaa0b2;
+  background: rgba(170, 160, 178, 0.14);
+}
+#backupActivityLogModal .backup-list-modal {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#backupActivityLogModal .backup-list-modal::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
