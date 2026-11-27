@@ -905,6 +905,223 @@ CREATE TABLE IF NOT EXISTS safety_backups (
         REFERENCES restore_history(id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ============================================================
+-- 34. EMPLOYEE ONBOARDING
+-- (merged from hr/onboarding.php + hr/recruitment.php)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS employee_onboarding (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    candidate_id INT UNSIGNED NULL,
+    employee_id INT UNSIGNED NULL,
+    employee_code VARCHAR(64) NULL,
+    full_name VARCHAR(160) NOT NULL,
+    email VARCHAR(190) NULL,
+    department VARCHAR(120) NOT NULL DEFAULT 'General',
+    job_title VARCHAR(160) NOT NULL DEFAULT 'New Hire',
+    stage VARCHAR(32) NOT NULL DEFAULT 'Hired',
+    status VARCHAR(40) NOT NULL DEFAULT 'In Progress',
+    step_info TINYINT(1) NOT NULL DEFAULT 1,
+    step_docs TINYINT(1) NOT NULL DEFAULT 0,
+    step_documents TINYINT(1) NOT NULL DEFAULT 0,
+    step_account TINYINT(1) NOT NULL DEFAULT 0,
+    step_orientation TINYINT(1) NOT NULL DEFAULT 0,
+    step_policy TINYINT(1) NOT NULL DEFAULT 0,
+    orientation_at DATETIME NULL,
+    orientation_room VARCHAR(120) NULL,
+    facilitator_employee_id INT UNSIGNED NULL,
+    facilitator_name VARCHAR(160) NULL,
+    buddy_name VARCHAR(160) NULL,
+    orientation_attended_at DATETIME NULL,
+    checked_in_by VARCHAR(160) NULL,
+    policy_acknowledged_at DATETIME NULL,
+    orientation_email_sent_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_onb_emp_code (employee_code),
+    UNIQUE KEY uniq_onb_email (email),
+    KEY idx_onb_facilitator_emp (facilitator_employee_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 35. EMPLOYEE ONBOARDING DOCUMENTS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS employee_onboarding_documents (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    onboarding_id INT UNSIGNED NOT NULL,
+    gov_id_type VARCHAR(80) NULL,
+    gov_id_number VARCHAR(80) NULL,
+    gov_id_verified TINYINT(1) NOT NULL DEFAULT 0,
+    clearance_type VARCHAR(80) NULL,
+    clearance_ref VARCHAR(100) NULL,
+    clearance_verified TINYINT(1) NOT NULL DEFAULT 0,
+    job_offer_signed_date DATE NULL,
+    job_offer_verified TINYINT(1) NOT NULL DEFAULT 0,
+    sss_number VARCHAR(40) NULL,
+    philhealth_number VARCHAR(40) NULL,
+    pagibig_number VARCHAR(40) NULL,
+    tin_number VARCHAR(40) NULL,
+    emergency_contact_name VARCHAR(160) NULL,
+    emergency_contact_phone VARCHAR(60) NULL,
+    remarks TEXT NULL,
+    verified_by VARCHAR(160) NULL,
+    verified_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_doc_onboarding_id (onboarding_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 36. JOB VACANCIES
+-- ============================================================
+CREATE TABLE IF NOT EXISTS job_vacancies (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(160) NOT NULL,
+    department VARCHAR(120) NOT NULL DEFAULT 'General',
+    employment_type VARCHAR(64) NOT NULL DEFAULT 'Full-time',
+    openings INT NOT NULL DEFAULT 1,
+    status VARCHAR(32) NOT NULL DEFAULT 'Open',
+    description TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 37. JOB APPLICANTS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS job_applicants (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vacancy_id INT UNSIGNED NULL,
+    full_name VARCHAR(160) NOT NULL,
+    email VARCHAR(190) NOT NULL,
+    phone VARCHAR(64) NULL,
+    job_title VARCHAR(160) NOT NULL DEFAULT 'Applicant',
+    department VARCHAR(120) NOT NULL DEFAULT 'General',
+    stage VARCHAR(32) NOT NULL DEFAULT 'Applied',
+    interview_at DATETIME NULL,
+    interview_mode VARCHAR(64) NULL DEFAULT 'Online / Video Call',
+    interview_location VARCHAR(255) NULL,
+    interviewer_name VARCHAR(160) NULL,
+    interview_notes TEXT NULL,
+    decision_notes TEXT NULL,
+    decided_at DATETIME NULL,
+    email_sent_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 38. WORK SHIFTS
+-- (merged from includes/schedule_evaluator.php + classes/AttendanceService.php;
+--  both name columns are nullable so either code path can insert)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS work_shifts (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NULL,
+    shift_name VARCHAR(100) NULL,
+    shift_code VARCHAR(40) NULL,
+    work_days_label VARCHAR(80) NOT NULL DEFAULT 'Monday - Friday',
+    working_days VARCHAR(100) NOT NULL DEFAULT 'Mon,Tue,Wed,Thu,Fri',
+    rest_days VARCHAR(100) NOT NULL DEFAULT 'Sat,Sun',
+    start_time TIME NOT NULL DEFAULT '08:00:00',
+    end_time TIME NOT NULL DEFAULT '17:00:00',
+    break_time_label VARCHAR(60) NOT NULL DEFAULT '12:00 PM - 01:00 PM',
+    break_minutes INT NOT NULL DEFAULT 60,
+    grace_minutes INT NOT NULL DEFAULT 15,
+    overtime_after_minutes INT NOT NULL DEFAULT 0,
+    overtime_multiplier DECIMAL(4,2) NOT NULL DEFAULT 1.25,
+    effective_date DATE NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'Active',
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    standard_hours DECIMAL(4,2) NOT NULL DEFAULT 8.00,
+    break_hours DECIMAL(4,2) NOT NULL DEFAULT 1.00,
+    ot_grace_minutes SMALLINT NOT NULL DEFAULT 15,
+    is_default TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 39. EMPLOYEE WORK SCHEDULES
+-- ============================================================
+CREATE TABLE IF NOT EXISTS employee_work_schedules (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT UNSIGNED NOT NULL UNIQUE,
+    department_name VARCHAR(100) NULL,
+    shift_id INT UNSIGNED NULL,
+    shift_name VARCHAR(100) NOT NULL DEFAULT 'Regular Day Shift',
+    work_days_label VARCHAR(80) NOT NULL DEFAULT 'Monday - Friday',
+    working_days VARCHAR(100) NOT NULL DEFAULT 'Mon,Tue,Wed,Thu,Fri',
+    rest_days VARCHAR(100) NOT NULL DEFAULT 'Sat,Sun',
+    shift_start TIME NOT NULL DEFAULT '08:00:00',
+    shift_end TIME NOT NULL DEFAULT '17:00:00',
+    break_time_label VARCHAR(60) NOT NULL DEFAULT '12:00 PM - 01:00 PM',
+    grace_minutes INT NOT NULL DEFAULT 15,
+    overtime_after_minutes INT NOT NULL DEFAULT 0,
+    overtime_multiplier DECIMAL(4,2) NOT NULL DEFAULT 1.25,
+    effective_from DATE NULL,
+    assigned_by VARCHAR(120) NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 40. EMPLOYEE SCHEDULE HISTORY
+-- ============================================================
+CREATE TABLE IF NOT EXISTS employee_schedule_history (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT UNSIGNED NOT NULL,
+    department_name VARCHAR(100) NULL,
+    shift_id INT UNSIGNED NULL,
+    shift_name VARCHAR(100) NOT NULL,
+    shift_start TIME NOT NULL,
+    shift_end TIME NOT NULL,
+    working_days VARCHAR(100) NOT NULL,
+    rest_days VARCHAR(100) NOT NULL,
+    overtime_after_minutes INT NOT NULL DEFAULT 0,
+    overtime_multiplier DECIMAL(4,2) NOT NULL DEFAULT 1.25,
+    effective_from DATE NOT NULL,
+    action_type VARCHAR(40) NOT NULL DEFAULT 'Assigned',
+    changed_by VARCHAR(120) NULL,
+    notes VARCHAR(255) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 41. ATTENDANCE RECORDS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS attendance_records (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL,
+    time_in TIME NULL,
+    time_out TIME NULL,
+    break_start TIME NULL,
+    break_end TIME NULL,
+    scheduled_start TIME NOT NULL DEFAULT '08:00:00',
+    scheduled_end TIME NOT NULL DEFAULT '17:00:00',
+    late_minutes INT NOT NULL DEFAULT 0,
+    overtime_minutes INT NOT NULL DEFAULT 0,
+    status VARCHAR(32) NOT NULL DEFAULT 'Present',
+    notes VARCHAR(255) NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_emp_date (employee_id, work_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 42. ATTENDANCE CORRECTIONS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS attendance_corrections (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT UNSIGNED NOT NULL,
+    work_date DATE NOT NULL,
+    requested_time_in TIME NULL,
+    requested_time_out TIME NULL,
+    reason TEXT NOT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'Pending',
+    reviewed_by VARCHAR(120) NULL,
+    reviewed_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================
