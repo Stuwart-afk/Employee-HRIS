@@ -1613,3 +1613,82 @@ body.modal-open {
   width: 0;
   height: 0;
 }
+/* ==========================================
+   CURRENT BACKUP SCHEDULE SUMMARY
+========================================== */
+
+.backup-schedule-summary {
+  margin: 20px 0 24px;
+  padding: 18px;
+  border: 1px solid rgba(155, 123, 211, 0.35);
+  border-radius: 12px;
+  background: rgba(155, 123, 211, 0.08);
+}
+
+.backup-schedule-summary-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.backup-schedule-summary-eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: #aaa0b2;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.backup-schedule-summary-heading strong {
+  display: block;
+  color: #ffffff;
+  font-size: 18px;
+}
+
+.backup-schedule-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.backup-schedule-summary-item {
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(23, 29, 50, 0.65);
+}
+
+.backup-schedule-summary-item span {
+  display: block;
+  margin-bottom: 5px;
+  color: #aaa0b2;
+  font-size: 12px;
+}
+
+.backup-schedule-summary-item strong {
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.backup-schedule-summary-note {
+  margin: 14px 0 0;
+  color: #b4a5c0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.backup-schedule-summary-note.warning {
+  color: #ffb477;
+}
+
+@media (max-width: 640px) {
+  .backup-schedule-summary-heading {
+    flex-direction: column;
+  }
+
+  .backup-schedule-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
