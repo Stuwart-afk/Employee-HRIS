@@ -35,7 +35,7 @@ try {
             backup_time,
             backup_day,
             retention_days
-        FROM backup_settings
+        FROM hris_backup_metadata.backup_settings
         WHERE id = 1
         LIMIT 1
     ");
