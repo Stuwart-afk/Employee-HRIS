@@ -65,7 +65,7 @@ if (
 
 try {
     $sql = "
-        INSERT INTO backup_settings (
+        INSERT INTO hris_backup_metadata.backup_settings (
             id,
             enabled,
             frequency,
