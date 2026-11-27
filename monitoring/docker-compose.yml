@@ -135,6 +135,8 @@ services:
         condition: service_healthy
     networks:
       monitoring:
+        aliases:
+          - hris-exporter
       hris_net:
         aliases:
           - hris-exporter
